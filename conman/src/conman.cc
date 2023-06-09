@@ -18,7 +18,7 @@
 
 #define DEFAULT_TTY	   "/dev/tty.usbserial-0001"
 #define DEFAULT_KERNEL "images/kernel8.img"
-#define PROGRESS_WIDTH 50
+#define PROGRESS_WIDTH 75
 #define BAUD		   921600
 
 const static ssize_t kMaxXferSize = 0x2000000;
@@ -135,7 +135,7 @@ void barGraph(int32_t percentage)
 
 void sendFile(const char *fileName)
 {
-	fprintf(stderr, "### File transfer request for %s receoved...\r\n", g.kernelFileName);
+	fprintf(stderr, "### File transfer request for %s received...\r\n", g.kernelFileName);
 	g.sendFd = open(fileName, O_RDONLY);
 	if (g.sendFd < 0)
 	{
@@ -327,7 +327,7 @@ int main(int argc, char *argv[])
 
 		tcsetattr(g.serialFd, TCSAFLUSH, &tios);
 
-		fprintf(stderr, "### Listening on %s\n", g.ttyFileName);
+		fprintf(stderr, "### Listening on %s. Ctrl-T q (or just Ctrl-C) to quit.\n", g.ttyFileName);
 
 		if (g.serialFd > STDIN_FILENO)
 		{
@@ -357,7 +357,7 @@ int main(int argc, char *argv[])
 
 			if (FD_ISSET(STDIN_FILENO, &g.erFds))
 			{
-				fprintf(stderr, "Select returned error on STDIN, exiting..\r\n");
+				fprintf(stderr, "### Select returned error on STDIN, exiting..\r\n");
 				g.quitNow  = true;
 				g.exitCode = 1;
 				break;

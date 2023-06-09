@@ -50,6 +50,8 @@ void disable_interrupt_controller()
 	IRQ_REGS->Irq0Enable.data[0] = 0;
 }
 
+extern void rebootSystem();
+
 void handle_irq()
 {
 	reg32 irq = 0;
@@ -64,8 +66,13 @@ void handle_irq()
 
 			while((AUX_REGS->MuIirReg & 4) == 4)
 			{
+				char c = uart_getc();
+				if (c == 18)
+				{
+					rebootSystem();
+				}
 				uart_puts("Uart recv: ");
-				uart_putc(uart_getc());
+				uart_putc(c);
 				uart_puts("\n");
 			}
 		}
