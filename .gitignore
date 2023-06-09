@@ -1,0 +1,14 @@
+.DS_Store
+.idea
+tmp/
+bin/
+build/
+
+# Ignore conman binary
+conman/conman
+
+*.o
+*.elf
+
+*.img
+*.log
