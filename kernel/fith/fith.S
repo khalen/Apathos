@@ -149,6 +149,39 @@ str_end_\label:
 code_\label:
 .endm
 
+// Define a new variable
+.macro defvar label, name, initial=0, name2 = "", flags = F_BUILTIN
+	defcode label, name, name2, flags
+	ldr	x0, =var_\label
+	push	x0
+	next
+.data
+.align 3
+.global var_\label
+var_\label:
+	.quad	\initial
+.endm
+
+// Define a new constant
+.macro defconst label, name, value, name2 = "", flags = F_BUILTIN
+	defcode label, name, name2, flags
+	ldr	x0, =\value
+	push	x0
+	next
+.endm
+
+// Built in variables
+// STATE - 0 if immediate execution mode, 1 if compilation mode
+defvar	STATE, "state"
+// HERE - Points to the next free byte of memory available for compilation
+defvar HERE, "here"
+// LATEST - Points to the most recently defined dictionary entry (head of the dict linked list)
+defvar LATEST,"latest", name_EXECUTE	// EXECUTE must be the last word defined to properly link to user definitionss
+// S0 - Stores the address of the top of the data (parameter) stack.
+defvar S0, "s0"
+// BASE - the current numerical base for converting literals
+defvar BASE, "base", 10
+
 
 // *** Cold start and fundamentals
 .text
