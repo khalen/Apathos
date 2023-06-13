@@ -22,4 +22,4 @@ typedef volatile u64   reg64;
 
 #define NULL  ((void *)0)
 
-#define PACKED __attribute__((packed))
+#define PACKED __attribute__((packed, aligned(4)))

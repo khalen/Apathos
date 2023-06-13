@@ -68,7 +68,7 @@ el1_entry:
 
 	// Actually enable the mmu!
 	mrs	x0, sctlr_el1
-	mov	x1, #SCTLR_MMU_ENABLED
+	mov	x1, #1
 	orr	x0, x0, x1
 	msr	sctlr_el1, x0
 

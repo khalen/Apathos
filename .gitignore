@@ -6,6 +6,7 @@ build/
 
 # Ignore conman binary
 conman/conman
+a.out
 
 *.o
 *.elf

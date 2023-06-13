@@ -1,18 +1,19 @@
-#include "base_defs.h"
 #include "mini_uart.h"
-#include "peripherals/gpio.h"
+#include "base_defs.h"
 #include "peripherals/aux.h"
+#include "peripherals/gpio.h"
 
-extern "C" {
+extern "C"
+{
 
-#define IO_QUEUE_SIZE    128
-#define IO_QUEUE_MASK    ~(IO_QUEUE_SIZE - 1)
+#define IO_QUEUE_SIZE 128
+#define IO_QUEUE_MASK ~(IO_QUEUE_SIZE - 1)
 
 struct IOQueue
 {
-    u8    buffer[IO_QUEUE_SIZE];
-    u64   headIdx;
-    u64   tailIdx;
+    u8	buffer[IO_QUEUE_SIZE];
+    u64 headIdx;
+    u64 tailIdx;
 };
 
 bool io_queue_empty(IOQueue *queue)
@@ -20,33 +21,32 @@ bool io_queue_empty(IOQueue *queue)
     return queue->headIdx == queue->tailIdx;
 }
 
-void io_enqueue(IOQueue* queue, u8 value)
+void io_enqueue(IOQueue *queue, u8 value)
 {
     u64 nextTail = (queue->tailIdx + 1) & IO_QUEUE_MASK;
     if (nextTail == queue->headIdx)
         return;
     queue->buffer[nextTail] = value;
-    queue->tailIdx = nextTail;
+    queue->tailIdx			= nextTail;
 }
 
-u8 io_dequeue(IOQueue* queue)
+u8 io_dequeue(IOQueue *queue)
 {
     return 0;
 }
 
 void handle_uart_irq()
 {
-
 }
 
 void uart_init()
 {
-    AUX_REGS->Enables    = 1;
-    AUX_REGS->MuIerReg   = 0xD;                       // Enable recv interrupt
-    AUX_REGS->MuCntlReg  = 0;
-    AUX_REGS->MuLcrReg   = 3;
-    AUX_REGS->MuIirReg   = 0xC6;
-    AUX_REGS->MuBaudReg  = AUX_MU_BAUD(921600);
+    AUX_REGS->Enables	= 1;
+    AUX_REGS->MuIerReg	= 0xD; // Enable recv interrupt
+    AUX_REGS->MuCntlReg = 0;
+    AUX_REGS->MuLcrReg	= 3;
+    AUX_REGS->MuIirReg	= 0xC6;
+    AUX_REGS->MuBaudReg = AUX_MU_BAUD(921600);
 
     gpio_useAsAlt5(14);
     gpio_useAsAlt5(15);
@@ -55,14 +55,16 @@ void uart_init()
 }
 
 // Send a byte
-void uart_putb(u8 c) {
+void uart_putb(u8 c)
+{
     while (!uart_isWriteByteReady())
         asm volatile("nop");
 
     AUX_REGS->MuIoReg = c;
 }
 
-u8 uart_getb() {
+u8 uart_getb()
+{
     while (!uart_isReadByteReady())
         asm volatile("nop");
 
@@ -92,7 +94,7 @@ void uart_puts(const char *s)
     if (s == NULL)
         return;
 
-    while(*s)
+    while (*s)
     {
         uart_putc(*s++);
     }
@@ -124,7 +126,7 @@ void uart_putHexLong(u64 word)
     uart_putHexWord((word >> 0) & 0xFFFFFFFF);
 }
 
-void uart_write(const u8* buf, u64 len)
+void uart_write(const u8 *buf, u64 len)
 {
     while (len != 0)
     {
@@ -133,7 +135,7 @@ void uart_write(const u8* buf, u64 len)
     }
 }
 
-void uart_writeText(const char* buf, u64 len)
+void uart_writeText(const char *buf, u64 len)
 {
     while (len != 0)
     {
@@ -149,5 +151,4 @@ void uart_read(u8 *buf, u64 len)
         buf[i] = uart_getb();
     }
 }
-
 }
