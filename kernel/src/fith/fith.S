@@ -305,6 +305,49 @@ defcode QDUP, "?dup"
 	push	x0
 1:	next
 
+defcode TOR, ">r"
+	pop	x0
+	pushrsp	x0
+	next
+
+defcode	FROMR, "r>"	// (a --r: a)
+	poprsp	x0
+	push	x0
+	next
+
+defcode TWOTOR, "2>r"	// (a b --r: a b)
+	pop2	x1, x0
+	pushrsp	x1
+	pushrsp	x0
+	next
+
+defcode TWOFROMR, "2r>" // (r: a b -- a b)
+	poprsp	x0
+	poprsp	x1
+	push2	x1, x0
+	next
+
+defcode	RFETCH, "r@"	// (r: a -- r: a a)
+	ldr	x0, [rsp]
+	push	x0
+	next
+
+defcode TWORFETCH, "2r@"	// (r: a b -- a b)
+	ldr	x0, [rsp]
+	ldr	x1, [rsp, #8]
+	push2	x1, x0
+	next
+
+defcode	RDROP, "rdrop"	// (r: a --)
+	poprsp	x0
+	next
+
+defcode TWORDROP, "2rdrop"
+	poprsp	x0
+	poprsp	x0
+	next
+
+// *** Arithmetic ops
 defcode INC, "1+"	// (a -- a+1)
 	ldr	x0, [dsp]
 	add	x0, x0, #1
@@ -407,20 +450,6 @@ defcode	LSHIFT, "lshift"	// (a b -- a << b)
 	push	x0
 	next
 
-// LOGICAL shift right, not arithmetic, does not propagate sign bit
-defcode	RSHIFT, "rshift"	// (a b -- a >> b)
-	pop2	x1, x0
-	lsr	x0, x1, x0
-	push	x0
-	next
-
-// ARITHMETIC shift right, propagates sign bit
-defcode	RSHIFTA, "rshifta"	// (a b -- a >> b)
-	pop2	x1, x0
-	asr	x0, x1, x0
-	push	x0
-	next
-
 defcode	MUL, "*"	// (a b -- a * b)
 	pop2	x1, x0
 	mul	x2, x1, x0
@@ -450,10 +479,59 @@ defword	DIVMOD, "/mod"	// (a b -- a/b a%b)
 	fw	MOD	// (a/b a b -- a/b a%b)
 	fw	EXIT
 
+// LOGICAL shift right, not arithmetic, does not propagate sign bit
+defcode	RSHIFT, "rshift"	// (a b -- a >> b)
+	pop2	x1, x0
+	lsr	x0, x1, x0
+	push	x0
+	next
+
+// ARITHMETIC shift right, propagates sign bit
+defcode	RSHIFTA, "rshifta"	// (a b -- a >> b)
+	pop2	x1, x0
+	asr	x0, x1, x0
+	push	x0
+	next
+
 defcode NEGATE, "negate"
 	ldr	x0, [dsp]
 	neg	x0, x0
 	str	x0, [dsp]
+	next
+
+defcode	INVERT, "invert"
+	ldr	x0, [dsp]
+	eon	x0, x0, xzr
+	str	x0, [dsp]
+	next
+
+defcode	AND, "and"
+	pop2	x1, x0
+	and	x0, x1, x0
+	push	x0
+	next
+
+defcode	OR, "or"
+	pop2	x1, x0
+	orr	x0, x1, x0
+	push	x0
+	next
+
+defcode	XOR, "xor"
+	pop2	x1, x0
+	eor	x0, x1, x0
+	push	x0
+	next
+
+// *** Booleans & comparison
+defcode	TRUE, "true"
+	mvn	x0, xzr
+	push	x0
+	next
+
+defcode	FALSE, "false"
+	mov	x0, xzr
+	push	x0
 	next
 
 .macro	defcnd	label, qname, cond
@@ -465,13 +543,6 @@ defcode NEGATE, "negate"
 	next
 .endm
 
-defcnd	EQ, "=", eq
-defcnd	NEQ, "<>", ne
-defcnd	LT, "<", lt
-defcnd	GT, ">", gt
-defcnd	LEQ, "<=", le
-defcnd	GEQ, ">=", ge
-
 .macro	defzcnd	label, qname, cond
 	defcode	\label, "\qname"
 	pop	x0
@@ -481,9 +552,234 @@ defcnd	GEQ, ">=", ge
 	next
 .endm
 
+defcnd	EQ, "=", eq
+defcnd	NEQ, "<>", ne
+defcnd	LT, "<", lt
+defcnd	GT, ">", gt
+defcnd	LEQ, "<=", le
+defcnd	GEQ, ">=", ge
+defcnd	ULT, "u<", lo
+defcnd	UGT, "u>", hi
+defcnd	ULEQ, "u<=", ls
+defcnd	UGEQ, "u>=", hs
+
 defzcnd	ZEQ, "0=", eq
 defzcnd	ZNEQ, "0<>", ne
 defzcnd	ZLT, "0<", lt
 defzcnd	ZGT, "0>", gt
 defzcnd	ZLEQ, "0<=", le
 defzcnd	ZGEQ, "0>=", ge
+
+// (t p q -- flag)	Test if t is within p and q, that is, p <= t < q.
+// This is a little more complicated than it seems, because the standard says that:
+// a) It has to work for signed AND unsigned numbers (but not testing signed vs. unsigned or vice versa, they all must be the same type)
+// b) They have to work consistently when the comparison range straddles the wrapping boundary of the max cell size.
+// The standard impl is:
+// : WITHIN ( test low high -- flag ) OVER - >R - R> U< ;
+defcode	WITHIN, "within"
+	pop3	x0, x1, x2		// x0 = test, x1 = low, x2 = high
+	sub	x3, x2, x1		// x3 = high - low
+	sub	x4, x0, x1		// x4 = test - low
+	cmp	x3, x4			// x3 < x4?
+	csetm	x0, lo			// lo = cc flag clear, unsigned <
+	push	x0
+	next
+
+// *** Branching
+defcode BRANCH, "branch"
+	ldr	x1, [fip]
+	add	fip, fip, x1
+	next
+
+defcode	ZBRANCH, "0branch"
+	pop	x0
+	cmp	x0, xzr
+	beq	code_BRANCH		// Jump to BRANCH if x0 = 0
+	add	fip, fip, #8		// Otherwise skip the offset
+	next
+
+// *** Memory access
+defcode	STORE, "!"	// (addr v --) *addr = v
+	pop2	x1, x0
+	str	x0, [x1]
+	next
+
+defcode CSTORE, "c!"	// (addr v --) *(byte *)addr = v & 0xFF
+	pop2	x1, x0
+	strb	w0, [x1]
+	next
+
+defcode	FETCH, "@"	// (addr -- v) v = *addr
+	pop	x0
+	ldr	x1, [x0]
+	push	x1
+	next
+
+defcode	CFETCH, "c@"	// (addr -- v) v = *(byte *)addr
+	pop	x0
+	ldrb	w1, [x0]
+	push	x1
+	next
+
+// This is essentially memcpy. It relies on the ASSUMPTION that on arm64 w/no unaligned address exceptions, a larger unaligned load or store
+// is still faster than n byte fetches or stores. Based on from guthub.com/ClickHouse/ClickHouse/memcpy.h; DOES NOT HANDLE OVERLAPPING SRC
+// AND DST CORRECTLY
+defcode	MOVE, "move"	// (srcaddr dstaddr u --)	Move u address units from srcaddr to dstaddr.
+#ifndef OPTIMIZED_MOVE
+	pop3	x0, x1, x2
+
+1:	cmp	x2, #0
+	beq	done
+
+	ldrb	w8, [x0], #1
+	strb	w8, [x1], #1
+	sub	x2, x2, #1
+	b	1b
+	next
+
+#else
+	pop3	x0, x1, x2
+
+tail:
+	// Small size?
+	cmp	x2, #16
+	bhi	med_size
+
+	// Copy small sizes using one fetch and one (overlapping, if u is not an exact pw2) store
+	cmp	x2, #8
+	blo	wordsize
+
+	// Copy last 8 bytes
+	sub	x2, x2, 8
+	ldr	x8, [x0, x2]
+	str	x8, [x1, x2]
+	// 1st 8 bytes (will overwrite some number of bytes we already copied)
+	ldr	x9, [x0]
+	str	x9, [x1]
+	b	done
+
+wordsize:
+	cmp	x2, #4
+	blo	halfwordsize
+
+	// Copy last 4 bytes
+	sub	x2, x2, 4
+	ldr	w8, [x0, x2]
+	str	w8, [x1, x2]
+	// 1st 4 bytes
+	ldr	w9, [x0]
+	str	w9, [x1]
+	b	done
+
+halfsize:
+	cmp	x2, #2
+	blo	bytesize
+
+	// Copy last 2 bytes
+	sub	x2, x2, 2
+	ldrh	w8, [x0, x2]
+	strh	w8, [x1, x2]
+	// 1st 2 bytes
+	ldrh	w9, [x0]
+	strh	w9, [x1]
+	b	done
+
+bytesize:
+	cmp	x2, #1
+	blo	done
+	ldrb	w8, [x0]
+	strb	w8, [x1]
+	b	done
+
+	// Large enough to loop, not large enough to care too much about dst alignment
+med_size:
+	cmp	x2, #128
+	bhi	large_size
+
+	// Copy last 8 bytes
+	sub	x2, x2, 8
+	ldr	x8, [x0, x2]
+	str	x8, [x1, x2]
+
+	// Copy remaining dwords
+medloop:
+	ldr	x8, [x0], #8
+	str	x8, [x1], #8
+	sub	x2, x2, 8
+	bhs	medloop
+	b	done
+
+large_size:
+	// Copy the first < 15 bytes unaligned, to align dest to 16 bytes so we can use ldp / stp
+	mov	x8, #16
+	and	x9, x1, #0xF
+	sub	x8, x8, x9	// 16 - (dst & 15)
+	and	x8, x8, #0xF	// (16 - (dst & 15)) & 15
+	beq	aligned
+
+	cmp	x8, #8
+	blt	byte_corr
+
+	// padding is > 8 bytes
+	ldr	x4, [x0], #8
+	str	x4, [x1], #8
+	sub	x2, #8
+	sub	x8, #8
+	bne	aligned
+
+byte_corr:
+	ldr	x4, [x0]
+	str	x4, [x1]
+	add	x0, x0, x8
+	add	x1, x1, x8
+
+aligned:
+	// Destination address is now aligned to 16 bytes - verify
+	tst	x4, 0xF
+	beq	unrolled
+	mov	x0, =bad_move_dest_alignment
+	b	abort
+
+unrolled:
+	ldr	x10, [x0], #8
+	ldr	x11, [x0], #8
+	stp	x10, x11, [x1], #16
+
+	ldr	x12, [x0], #8
+	ldr	x13, [x0], #8
+	stp	x12, x13, [x1], #16
+
+	ldr	x14, [x0], #8
+	ldr	x15, [x0], #8
+	stp	x14, x15, [x1], #16
+
+	ldr	x16, [x0], #8
+	ldr	x17, [x0], #8
+	stp	x16, x17, [x1], #16
+
+	ldr	x10, [x0], #8
+	ldr	x11, [x0], #8
+	stp	x10, x11, [x1], #16
+
+	ldr	x12, [x0], #8
+	ldr	x13, [x0], #8
+	stp	x12, x13, [x1], #16
+
+	ldr	x14, [x0], #8
+	ldr	x15, [x0], #8
+	stp	x14, x15, [x1], #16
+
+	ldr	x16, [x0], #8
+	ldr	x17, [x0], #8
+	stp	x16, x17, [x1], #16
+
+	sub	x2, x2, #128
+	blo	tail				// Final < 128 bytes is handled by the upper routines
+	b	unrolled
+#endif
+
+done:
+	next
+
+// Uses move, as implemented in the Forth 20xx standard
+defcode	CMOVE, "cmove"	// (fromaddr toaddr u --)	for i in 0 .. u	toaddr[i] = fromaddr[i]
