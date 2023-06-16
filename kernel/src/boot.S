@@ -56,7 +56,7 @@ el1_entry:
 	ldr	x0, =__bss_start
 	ldr	w1, =__bss_size
 3:	cbz	w1, 4f			// Leave loop ifz
-	str	xzr, [x0], #8	// Store zero in x1, inc x1 by 8
+	str	xzr, [x0], #8		// Store zero in x1, inc x1 by 8
 	sub	w1, w1, #1
 	cbnz	w1, 3b		 	// Loop if non zero
 
@@ -72,7 +72,7 @@ el1_entry:
 	orr	x0, x0, x1
 	msr	sctlr_el1, x0
 
-4:	bl	main
+4:	bl	kernel_entry
 	b	proc_hang		 // If main returns, jump to the inf loop as if not the main core
 
 	// Wait for event forever

@@ -30,12 +30,6 @@ void rebootSystem()
 	delay(0xFFFFFFFFFFFF);
 }
 
-typedef struct PACKED
-{
-	u16 dummy0;
-	u64 testValue;
-} AccessTest;
-
 void getKernel()
 {
 	// Initiate xfer
@@ -77,31 +71,6 @@ int main()
 	// Turn on all IRQs
 	irq_enable();
 	timer_init();
-
-	// Test that the MMU is configured properly. RAM should run from 0x00 -> 8g with the device section representing a
-	// "hole" of 64mb starting at PERIPHERAL_BASE.
-	const u64 testValue = 0xDEADBEEFBADF00D0ul;
-
-	printf("Unaligned check write:\n");
-	// Test unaligned access. This will throw a sync error execption if the MMU isn't enabled.
-	volatile AccessTest *testerPtr = (AccessTest *)(3ul * GB);
-	testerPtr->testValue		   = testValue;
-
-	u64 checkVal = testerPtr->testValue;
-	printf("  Read: %s!\n\n", checkVal == testValue ? "Success" : "Fail");
-
-	// echo everything back
-	while (1)
-#if 0
-	{
-		char c = uart_getc();
-		if (c == '\\')
-			rebootSystem();
-		uart_putc(c);
-	}
-#else
-		;
-#endif
 
 	return 0;
 }
