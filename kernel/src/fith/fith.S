@@ -20,6 +20,9 @@
 #define PAD_BUFFER_SIZE			1024
 #define	LINE_BUFFER_SIZE		1024
 #define WORD_BUFFER_SIZE		64
+#define DEFAULT_DSTACK_SIZE		4096
+#define DEFAULT_RSTACK_SIZE		1024
+#define DEFAULT_DICT_SIZE		1024*1024
 
 // Important system registers
 dsp	.req	x19	// Fith data stack
@@ -103,7 +106,7 @@ scw5	.req	w28
 // Copy dsp to sp, ensuring 128 byte alignment as per abi
 .macro	round_dsp_to_sp
 	mov	scx0, dsp
-	tst	scx0, #0F
+	tst	scx0, #0xF
 	beq	1f
 	sub	scx0, scx0, #8
 1:	mov	sp, scx0
@@ -113,8 +116,8 @@ scw5	.req	w28
 // "assemble" it into other words without having to keep it in sync in more than one place.
 .macro	next_impl, wrapper:vararg=
 	\wrapper ldr	x0, [fip], #8
-	\wrapper ldr	x0, [x0]
-	\wrapper br	x0
+	\wrapper ldr	x1, [x0]
+	\wrapper br	x1
 .endm
 
 .macro	next
@@ -149,7 +152,6 @@ name_\label:
 	.byte	\flags | (str_end_\label - str_\label)
 str_\label:
 	.ascii	"\qname"
-	.ascii	"\qname2"
 str_end_\label:
 	.align 4
 .global \label
@@ -208,50 +210,6 @@ var_\label:
 	push	x0
 	next
 .endm
-
-// Built in variables
-// STATE - 0 if immediate execution mode, 1 if compilation mode
-defvar	STATE, "state"
-// CP - Points to the next free byte of "compilation" memory
-defvar CP, "cp"
-// LATEST - Points to the most recently defined dictionary entry (head of the dict linked list)
-defvar LATEST,"latest", name_EXECUTE	// EXECUTE must be the last word defined to properly link to user definitionss
-// S0 - Stores the address of the top of the data (parameter) stack.
-defvar S0, "s0"
-// BASE - the current numerical base for converting literals
-defvar BASE, "base", 10
-
-	.equ	USER_INPUT_ID,0
-	.equ	EVALUATE_ID,-1
-
-// *** Cold start and fundamentals
-.text
-.align 3
-.global fith_start
-fith_start:
-	ldr	x0, =var_S0
-	mov	dsp, sp
-	str	x1, [x0]	// Orig stack position in S0
-	ldr	rsp, =return_stack_top
-	ldr	x0, =data_segment	// Initial rtn stack and DS
-	ldr	x1, =var_CP		// HERE starts out pointing at the initial data seg
-	str	x0, [x1]
-	ldr	fip, =cold_start
-	next				// Next will start the interpreter with cold_start as the first word
-
-// DOCOL is called at the start of every Fith word.
-// ) CFA of a Fith word in x0
-// ) Save old fip on return stack
-// ) Make fip point to the 1st code word in the word we're running
-// ) Start interpreting with next
-_DOCOL:
-	pushrsp	fip
-	add fip, x0, 8
-
-	// fall through into next
-
-_NEXT:
-	next_impl
 
 // The EXIT word is very important. It is what pops the return stack then resumes execution (via next)
 defcode EXIT, "exit"
@@ -894,6 +852,38 @@ defcode ALIGNED, "aligned"
 	push	x2
 	next
 
+// (lfa -- cfa) Given a link field address of a dict word, convert that into a code field address ** DICT LAYOUT DEPENDENCY
+defcode TOCFA, ">cfa"
+	pop	x0
+	add	x0, x0, #24	// 3 words
+	push	x0
+	next
+
+// (lfa -- cfa) Given a link field address of a dict word, convert that into a code field address
+defcode CFAFROM, "cfa>"
+.fcfacode:
+	pop	x0
+	sub	x0, x0, #24	// 3 words
+	push	x0
+	next
+
+defcode TOBODY, ">body"
+.bodycode:
+	pop	x0
+	add	x0, x0, #32
+	push	x0
+	next
+
+defcode BODYFROM, "body>"
+.fbodycode:
+	pop	x0
+	sub	x0, x0, #32
+	push	x0
+	next
+
+.equ	USER_INPUT_ID,0
+.equ	EVALUATE_ID,-1
+
 // *** Low level input
 // Input
 defvar IB, "ib", default_input_buffer
@@ -936,10 +926,7 @@ defcode	SOURCE, "source"		// ( -- caddr u )
 
 defcode SOURCE_ID, "source-id"		// ( -- 0 | -1 )
 	// Hack warning.
-	loadvar	x0, IB
-	ldr	x1, =line_input_buffer
-	cmp	x0, x1
-	csetm	x0, ne
+	loadvar	x0, SOURCEID
 	push	x0
 	next
 
@@ -1104,7 +1091,7 @@ convertChar:
 	ldrb	w4, [x0], 1	// Fetch chr
 	cmp	x0, x1		// Room for closing tick?
 	mov	x6, x4
-	bgs	.falseRet
+	bhs	.falseRet
 
 	ldrb	scw0, [x0], 1	// Check for '
 	cmp	scw0, '\''
@@ -1285,32 +1272,37 @@ defcode	SAVEINPUT, "save-input"
 	loadvar	x0, IB
 	loadvar x1, NUMIB
 	loadvar x2, TOIN
+	loadvar x3, SOURCEID
 
 	pushrsp	x0
 	pushrsp	x1
 	pushrsp	x2
+	pushrsp	x3
 	next
 
 // ( r: ib #ib >in -- r: )	// Restore the input state from the return stack
 defcode	RESTOREINPUT, "restore-input"
+	poprsp	x3
 	poprsp	x2
 	poprsp	x1
 	poprsp	x0
 
+	savevar	SOURCEID, x3
 	savevar	TOIN, x2
 	savevar	NUMIB, x1
 	savevar	IB, x0
 	next
 
-// ( ib #ib >in -- )		// Set the input state to >in, #ib, ib
-// 	Redundant, since it's restore-input except with params on the rstack
+// ( ib #ib >in id -- )		// Set the input state to >in, #ib, ib, id
+// 	just sets up the return stack with expected stuff and runs RESTOREINPUT.
 defword	SETINPUT, "set-input"
-	pop3	x0, x1, x2
+	pop4	x0, x1, x2, x3
 
-	savevar	TOIN, x2
-	savevar	NUMIB, x1
-	savevar	IB, x0
-	next
+	pushrsp	x0
+	pushrsp	x1
+	pushrsp	x2
+	pushrsp	x3
+	b	code_RESTOREINPUT
 
 // ( caddr u -- ) Save the current input state, then set the input state to the FCS on the stack.
 // 	Interpret all the input, then restore the previous input state.
@@ -1318,7 +1310,8 @@ defword EVALUATE, "evaluate"
 	fw	SAVEINPUT
 
 	fw	LIT, 0		// ( caddr u -- caddr u 0 )
-	fw	SETINPUT	// ( caddr u 0 -- )
+	fw	LIT, -1		// ( caddr u -- caddr u 0 -1 )
+	fw	SETINPUT	// ( caddr u -- )
 
 	fw	INTERPRETLINE
 
@@ -1326,19 +1319,73 @@ defword EVALUATE, "evaluate"
 	fw	EXIT
 
 defcode	STARDOCOL, "*docol"
-	ldr	x0, =code_DOCOL
-	push	x0
+	fw	LIT, _DOCOL
+	fw	EXIT
+
+defword STARVRESET, "*vreset"
+	fw	LIT, avRESET
+	fw	EXIT
+
+// ( xt -- ? ) Execute the xt on top of stack. Note that this does not end with "next" like other words - we want the "next"
+//   in the called xt to return to execute's caller.
+defcode	EXECUTE, "execute"
+	pop	x0
+	ldr	x0, [x0]
+	br	x0
+
+defcode PRINTF, "printf"
+	pop	x0
+	round_dsp_to_sp
+	bl	tfp_printf
 	next
 
-defcode STARVRESET, "*vreset"
-	ldr	x0, =reset_vector
-	ldr	x0, [x0]
-	push	x0
+defcode PRINTF2, "printf2"
+	pop2	x0, x1
+	round_dsp_to_sp
+	bl	tfp_printf
 	next
+
+defcode PRINTF3, "printf3"
+	pop3	x0, x1, x2
+	round_dsp_to_sp
+	bl	tfp_printf
+	next
+
+defcode PRINTF4, "printf4"
+	pop4	x0, x1, x2, x3
+	round_dsp_to_sp
+	bl	tfp_printf
+	next
+
+defword COLDSTART, "*coldstart"
+cold_start:
+	fw	LIT, hello_msg
+	fw	PRINTF
+	fw	LIT, test_msg
+	fw	LIT, test_str
+	fw	LIT, 123456
+	fw	LIT, 'c'
+	fw	PRINTF4
+	fw	BRANCH, -8
+
+defword	INTERPRETLINE, "interpretline"
+	fw	LIT, enter_msg
+	fw	PRINTF
+	fw	EXIT
+
+hello_msg:	.string	"Welcome to Fith!\n"
+test_msg:	.string "This is a printf test: %s %ld %c\nShould read: Test 123456 c\n"
+test_str:	.string	"Test"
+enter_msg:	.string "Interpreter entered"
+
+defvar	EORO, "*eoro"
 
 .data
 .align 4
 reset_vector:	.quad	0
+
+.align 4
+data_segment:
 
 // **** End of read-only dictionary section ****
 
@@ -1347,6 +1394,82 @@ reset_vector:	.quad	0
 // It just fetches the reset vector and invokes it. Should hang / reset / print a message / whatever if it ever
 // returns, since that means the reset routine returned.
 
-defword	EORO, "*eoro"
-ipl:
-	fw	VRESET
+defword	VRESET, "vreset"
+avRESET:
+	fw	COLDSTART
+	fw	EXIT
+
+// Built in variables
+// STATE - 0 if immediate execution mode, 1 if compilation mode
+defvar	STATE, "state"
+
+// CP - Points to the next free byte of "compilation" memory
+defvar CP, "cp"
+
+// LATEST - Points to the most recently defined dictionary entry (head of the dict linked list)
+defvar LATEST,"latest", name_EORO	// EORO (end of read only) must be the last word defined to properly link to user definitionss
+
+// S0 - Stores the address of the top of the data (parameter) stack.
+defvar S0, "s0"
+
+// S0 - Stores the address of the top of the data (parameter) stack.
+defvar R0, "r0"
+
+// BASE - the current numerical base for converting literals
+defvar BASE, "base", 10
+
+defvar CURWORDLIST, "cur-wordlist", var_THEWL
+
+defvar	THEWL, "thewl", 0
+
+// Data sections, should be temp until we get proper allocation in place etc.
+.data
+.align 5
+
+
+return_stack:
+	.space	DEFAULT_RSTACK_SIZE
+	.equ return_stack_top, .
+
+data_stack:
+	.space	DEFAULT_DSTACK_SIZE
+	.equ data_stack_top, .
+
+
+// *** Cold start and fundamentals
+.text
+.align 3
+.global fith_boot
+fith_boot:
+	ldr	dsp, =data_stack_top
+	savevar	S0, dsp
+
+	ldr	rsp, =return_stack_top
+	savevar	R0, rsp
+
+reset:
+	savevar	STATE, xzr
+	savevar	TOIN, xzr
+
+	mov	x0, #10
+	savevar	BASE, x0
+
+	ldr	x0, =data_segment	// Initial rtn stack and DS
+	savevar	CP, x0
+
+	ldr	fip, =avRESET
+	next				// Next will start the interpreter with cold_start as the first word
+
+// DOCOL is called at the start of every Fith word.
+// ) CFA of a Fith word in x0
+// ) Save old fip on return stack
+// ) Make fip point to the 1st code word in the word we're running
+// ) Start interpreting with next
+_DOCOL:
+	pushrsp	fip
+	add fip, x0, #8
+
+	// fall through into next
+
+_NEXT:
+	next_impl

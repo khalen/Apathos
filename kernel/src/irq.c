@@ -35,9 +35,9 @@ extern "C"
 {
 
 // Called from the asm exception handler
-void show_invalid_entry_message(u32 type, u64 esr, u64 addr)
+void show_invalid_entry_message(u32 type, u64 esr, u64 addr, u64 fip, u64 dsp, u64 rsp, u64 x0)
 {
-	printf("Exception error caught: %s - %d, ESR: %lX, Addr: %lX", entryErrorMessages[type], type, esr, addr);
+	printf("Exception error caught: %s - %d, ESR: 0x%lX, Addr: 0x%lX, Fip: 0x%lX, Dsp: 0x%lX, Rsp: 0x%lX, X0: 0x%lx", entryErrorMessages[type], type, esr, addr, fip, dsp, rsp, x0);
 }
 
 void enable_interrupt_controller()

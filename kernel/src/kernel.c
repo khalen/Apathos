@@ -10,6 +10,8 @@
 
 extern "C"
 {
+void fith_boot();
+
 void printfPutC(void *, char c)
 {
 	uart_putc(c);
@@ -51,7 +53,8 @@ void getKernel()
 	printf("*** Read %ld bytes.\n");
 }
 
-int main()
+///// TOP LEVEL ENTRY POINT /////
+int kernel_entry()
 {
 	const char *excLevelNames[] = {"User", "Kernel", "Hypervisor", "Firmware"};
 
@@ -71,6 +74,10 @@ int main()
 	// Turn on all IRQs
 	irq_enable();
 	timer_init();
+
+	printf("\n\nBooting FITH v.-3.1415927\n");
+
+	fith_boot();
 
 	return 0;
 }

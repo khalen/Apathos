@@ -50,10 +50,15 @@
 .endm
 
 .macro handle_invalid_entry type
+	mov	x22, x0
 	kernel_entry
 	mov	x0, #\type
 	mrs	x1, esr_el1
 	mrs	x2, elr_el1
+	mov	x3, x21
+	mov	x4, x19
+	mov	x5, x20
+	mov	x6, x22
 	bl	show_invalid_entry_message
 	b	err_hang
 .endm
