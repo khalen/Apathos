@@ -1,5 +1,8 @@
 #include "mini_uart.h"
 #include "base_defs.h"
+#include "mem.h"
+#include "printf.h"
+
 #include "peripherals/aux.h"
 #include "peripherals/gpio.h"
 
@@ -7,7 +10,7 @@ extern "C"
 {
 
 #define IO_QUEUE_SIZE 128
-#define IO_QUEUE_MASK ~(IO_QUEUE_SIZE - 1)
+#define IO_QUEUE_MASK (IO_QUEUE_SIZE - 1)
 
 struct IOQueue
 {
@@ -16,27 +19,61 @@ struct IOQueue
     u64 tailIdx;
 };
 
+IOQueue inputQueue;
+
 bool io_queue_empty(IOQueue *queue)
 {
     return queue->headIdx == queue->tailIdx;
 }
 
-void io_enqueue(IOQueue *queue, u8 value)
+bool io_queue_full(IOQueue *queue)
 {
-    u64 nextTail = (queue->tailIdx + 1) & IO_QUEUE_MASK;
-    if (nextTail == queue->headIdx)
-        return;
-    queue->buffer[nextTail] = value;
-    queue->tailIdx			= nextTail;
+    u64 nextHead = (queue->headIdx + 1) & IO_QUEUE_MASK;
+    return nextHead == queue->tailIdx;
 }
 
-u8 io_dequeue(IOQueue *queue)
+void io_enqueue(IOQueue *queue, u8 value)
 {
-    return 0;
+    u64 nextHead = (queue->headIdx + 1) & IO_QUEUE_MASK;
+    if (nextHead == queue->tailIdx)
+        return;
+    queue->buffer[queue->headIdx] = value;
+    queue->headIdx			      = nextHead;
+}
+
+u32 io_dequeue(IOQueue *queue)
+{
+    if (io_queue_empty(queue))
+        return 0xFFFFFFFF;
+    u32 c = queue->buffer[queue->tailIdx];
+    u64 nextTailIdx = (queue->tailIdx + 1) & IO_QUEUE_MASK;
+    queue->tailIdx = nextTailIdx;
+    return c;
+}
+
+void io_initQueue(IOQueue *queue)
+{
+    memzero(queue, sizeof(IOQueue));
+}
+
+u8 uart_raw_getb()
+{
+    while (!uart_isReadByteReady())
+        asm volatile("nop");
+
+
+    return AUX_REGS->MuIoReg;
 }
 
 void handle_uart_irq()
 {
+    char c = uart_raw_getb();
+    if (c == 18)
+    {
+        extern void rebootSystem();
+        rebootSystem();
+    }
+    io_enqueue(&inputQueue, c);
 }
 
 void uart_init()
@@ -65,11 +102,10 @@ void uart_putb(u8 c)
 
 u8 uart_getb()
 {
-    while (!uart_isReadByteReady())
+    while (io_queue_empty(&inputQueue))
         asm volatile("nop");
 
-    u32 val = AUX_REGS->MuIoReg;
-    return val & 0xFF;
+    return io_dequeue(&inputQueue);
 }
 
 char uart_getc()

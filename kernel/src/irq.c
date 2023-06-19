@@ -66,14 +66,8 @@ void handle_irq()
 
 			while((AUX_REGS->MuIirReg & 4) == 4)
 			{
-				char c = uart_getc();
-				if (c == 18)
-				{
-					rebootSystem();
-				}
-				uart_puts("Uart recv: ");
-				uart_putc(c);
-				uart_puts("\n");
+				extern void handle_uart_irq();
+				handle_uart_irq();
 			}
 		}
 		if (irq & SYS_TIMER_1_IRQ)

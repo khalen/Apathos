@@ -3,6 +3,7 @@
 tmp/
 bin/
 build/
+.gdb_history
 
 # Ignore conman binary
 conman/conman

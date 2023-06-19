@@ -53,6 +53,31 @@ void getKernel()
 	printf("*** Read %ld bytes.\n");
 }
 
+u64	kernel_readline(char *destBuffer, u64 maxLen)
+{
+	i32	lineLen = 0;
+
+	do
+	{
+		int c = uart_getc();
+		uart_putc(c);
+
+		switch(c)
+		{
+			case '\r':
+			case '\n':
+				return (u64) lineLen;
+
+			case 8:
+				lineLen--;
+				break;
+		}
+
+		destBuffer[lineLen++] = c;
+
+	} while(1);
+}
+
 ///// TOP LEVEL ENTRY POINT /////
 int kernel_entry()
 {

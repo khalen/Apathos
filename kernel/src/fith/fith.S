@@ -103,15 +103,6 @@ scw5	.req	w28
 	ldr	\reg3, [dsp], #8
 .endm
 
-// Copy dsp to sp, ensuring 128 byte alignment as per abi
-.macro	round_dsp_to_sp
-	mov	scx0, dsp
-	tst	scx0, #0xF
-	beq	1f
-	sub	scx0, scx0, #8
-1:	mov	sp, scx0
-.endm
-
 // This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
 // "assemble" it into other words without having to keep it in sync in more than one place.
 .macro	next_impl, wrapper:vararg=
@@ -558,6 +549,24 @@ defzcnd	ZGT, "0>", gt
 defzcnd	ZLEQ, "0<=", le
 defzcnd	ZGEQ, "0>=", ge
 
+// ( a b -- a|b ) Return whichever of a or b is smaller (signed)
+defcode MIN, "min"
+	pop2	x0, x1
+	cmp	x0, x1
+	blt	1f
+	mov	x0, x1
+1:	push	x0
+	next
+
+// Same as min, unsigned
+defcode UMIN, "umin"
+	pop2	x0, x1
+	cmp	x0, x1
+	blo	1f
+	mov	x0, x1
+1:	push	x0
+	next
+
 // (t p q -- flag)	Test if t is within p and q, that is, p <= t < q.
 // This is a little more complicated than it seems, because the standard says that:
 // a) It has to work for signed AND unsigned numbers (but not testing signed vs. unsigned or vice versa, they all must be the same type)
@@ -841,15 +850,33 @@ defcode ALLOT, "allot"
 defcode ALIGN, "align"
 	loadvar	x0, CP
 	add	x1, x0, #7
-	and	x2, x1, #7
+	bic	x2, x1, #7
+	savevar	CP, x2
+	next
+
+defcode ALIGN16, "align16"
+	loadvar	x0, CP
+	add	x1, x0, #15
+	bic	x2, x1, #15
 	savevar	CP, x2
 	next
 
 defcode ALIGNED, "aligned"
 	pop	x0
 	add	x1, x0, #7
-	and	x2, x1, #7
+	bic	x2, x1, #7
 	push	x2
+	next
+
+// ( v addr -- aaddr )  Align addr by advancing it such that the lower v bits are clear.
+defcode	NUMALIGNED, "#aligned"
+	pop2	x1, x0
+	mov	x2, #1
+	lsl	x2, x2, x1	// (1 << v) - 1
+	sub	x2, x2, #1
+	add	x0, x0, x2
+	bic	x0, x0, x2
+	push	x0
 	next
 
 // (lfa -- cfa) Given a link field address of a dict word, convert that into a code field address ** DICT LAYOUT DEPENDENCY
@@ -880,6 +907,384 @@ defcode BODYFROM, "body>"
 	sub	x0, x0, #32
 	push	x0
 	next
+
+// *** Compilation misc.
+defcode	CELLS, "cells"
+	pop	x1
+	lsl	x0, x1, #3
+	push	x0
+	next
+
+defword	CELLPLUS, "cell+"
+	fw	LIT, 1
+	fw	CELLS
+	fw	ADD
+	fw	EXIT
+
+defword COMMA, ","
+	fw	HERE
+	fw	LIT, 8
+	fw	ALLOT
+	fw	STORE
+	fw	EXIT
+
+defword CCOMMA, "c,"
+	fw	HERE
+	fw	LIT, 1
+	fw	ALLOT
+	fw	CSTORE
+	fw	EXIT
+
+defword LITERAL, "literal", F_IMMEDIATE
+	fw	LIT, LIT	// Well that's fun
+	fw	EXIT
+
+defword BRA, "["
+	fw	LIT, 0
+	fw	STATE
+	fw	STORE
+	fw	EXIT
+
+defword KET, "]"
+	fw	LIT, 1
+	fw	STATE
+	fw	STORE
+	fw	EXIT
+
+// ( addr u -- ) Create dict entry for word on stack
+defword STARCREATE, "*create"
+	fw	HERE, TOR
+	fw	GETCURRENT, FETCH	// ( addr r: newc )
+	fw	COMMA			// Link field
+
+	// Name len byte
+	fw	DUP			// ( addr u u )
+	fw	CCOMMA			// ( addr u )
+	fw	DUP
+	fw	LIT, 7, GT, TOR		// ( addr u r: newc gflag )
+
+	// Name words
+	fw	LIT, 15			// Max len of name
+	fw	MIN			// ( addr u|15 )
+	fw	HERE
+	fw	SWAP			// ( addr here u|15 )
+	fw	CMOVE
+
+	// Align, then skip an extra word if the name was short
+	fw	LIT, 1, CELLS, ALLOT, ALIGN
+	fw	RFROM
+	fw	ZBRANCH
+	fw	LIT, 1f - .
+	fw	LIT, 1, CELLS, ALLOT
+
+	// Code field
+1:	fw	LIT, _DOCOL
+
+	// Update last
+	fw	RFROM
+	fw	GETCURRENT, STORE
+	fw	EXIT
+
+defword	CREATE, "CREATE"
+	fw	PARSEWORD
+	fw	STARCREATE
+	fw	EXIT
+
+defword COLON, ":"
+	fw	CREATE
+	fw	KET
+	fw	EXIT
+
+defword	SEMIC, ";", F_IMMEDIATE
+	fw	LIT, EXIT
+	fw	COMMA
+	fw	FALSE
+	fw	STATE, STORE
+	fw	EXIT
+
+defword	IMMEDIATE, "immediate"
+	fw	LATEST
+	fw	DUP, CFETCH
+	fw	LIT, F_IMMEDIATE
+	fw	OR
+	fw	SWAP, CSTORE
+	fw	EXIT
+
+// ( addr u -- ) Compile a string literal into the current word.
+// This consists of:
+// 	BRANCH
+// 	(offset to T)
+// 	(string) + (alignment)
+// T:	LIT, addr
+// 	LIT, u
+defword SLITERAL, "sliteral", F_IMMEDIATE
+	fw	LIT, BRANCH, COMMA
+	fw	DUP
+	fw	CELLPLUS
+	fw	ALIGNED
+	fw	COMMA
+	fw	HERE, SWAP
+	fw	DUP, ALIGNED
+	fw	ALLOT
+	fw	OVER, LITERAL
+	fw	DUP, LITERAL
+	fw	CMOVE
+	fw	EXIT
+
+// ( addr u -- ) 	Given a FCS, translate any upper case letters to lower case. Note: In place. Note note: Ascii only. Note note note: lame.
+defcode	FSTOLOWER, "fstolower"
+	pop2	x0, x1
+	bl	fstolower_impl
+	next
+
+fstolower_impl:
+1:	cmp	x1, xzr
+	ble	2f
+
+	// Fetch next chr
+	ldrb	w2, [x0], #1
+	sub	x1, x1, #1
+
+	cmp	x2, #'A'
+	blo	1b		// Less than A
+
+	cmp	x2, #'Z'	// Greater than Z
+	bhi	1b
+
+	// Convert to lower case
+	sub	x2, x2, #'A'
+	add	x2, x2, #'a'
+	strb	w2, [x0, #-1]
+	b	1b
+
+2:	ret
+
+// ( addr -- ) 	Given a SCS, translate any upper case letters to lower case. Note: In place. Note note: Ascii only. Note note note: lame.
+defcode	STOLOWER, "stolower"
+	pop2	x0
+	bl	stolower_impl
+	next
+
+stolower_impl:
+	ldrb	w1, [x0], #1
+	b	fstolower_impl
+
+// To short counted string, also zeros to next word boundary making it compatible with our name field tests
+// in word matching.
+// ( caddr caddr u -- ) Takes dest, src, len -- makes a short counted string at dest
+defcode	TOSCS, "#toscs"
+	pop3	x0, x1, x2
+	bl	toscs_impl
+	next
+
+toscs_impl:
+	strb	w2, [x0], #1	// Store length byte
+
+1:	cmp	x2, xzr
+	beq	2f
+
+	ldrb	w3, [x1], #1
+	strb	w3, [x0], #1
+	sub	x2, x2, #1
+	b	1f
+
+2:	// Clear to start of next word
+	and	x2, x0, #7
+3:	cmp	x2, xzr
+	beq	4f
+	strb	wzr, [x0], #1
+	sub	x2, x2, #1
+	b	3b
+
+4:	ret
+
+// Note: caddrs here are SCS
+// ( caddr caddr lfa --		lowered normal len lfa --
+// 	caddr caddr lfa 0  		- No match
+// 	caddr caddr 0   0 true	- End of list
+// 	caddr caddr xt 1|-1 true	- Match
+// )
+// Check to see if the word at lfa matches the name given. If it does, return 1 if the word isn't immediate or -1 if it is
+defcode	MATCHXT, "matchxt"
+	pop3	x2, x1, x0
+
+.global matchxt_impl
+matchxt_impl:
+	// If lfa is null, we hit the end of the list
+	cmp	x2, xzr
+	bne	1f
+
+	push4	x2, x1, xzr, xzr
+	mov	x11, #-1
+	push	x11
+	b	5f
+
+	// Use lower buf if this is a builtin word, otherwise normal buf
+	ldrb	w9, [x0]
+	tst	w9, F_BUILTIN
+	csel	x10, x2, x1, ne
+
+	// Make mask for first word - top byte is flags + len, need to mask off flags
+	mov	x8, #-1			// x5 = 0xFFFFFFFFFFFFFFFF
+	movk	x8, #0x1FFF, LSL #48	// x5 = 0x1FFFFFFFFFFFFFFF
+
+	// Fetch first comparison words - will be at the word after the lfa
+	ldr	x3, [x10, #8]
+	ldr	x4, [x0, #8]
+
+	// Mask flags from the first comparison word
+	and	x7, x3, x5
+	cmp	x7, x4
+	bne	4f		// No match
+
+	// Check second word - faster to check than take a branch? Maybe not, since we have to fetch the next word
+	ldr	x5, [x10, #16]
+	ldr	x6, [x0, #16]
+	cmp	x5, x6
+	bne	4f		// No match
+
+	// Match! Check if it's immediate
+	mov	x9, #F_IMMEDIATE
+	lsl	x9, x9, #48
+	tst	x7, x9
+	beq	1f
+	mov	x3, #1
+	b	2f
+1:	mov	x3, #-1
+2:	add	x0, x0, #24		// Move to the cfa of this word
+
+	push3	x2, x1, x0
+	push	x3
+	mov	x11, #-1
+	push	x11
+	b	5f
+
+4:	push4	x2, x1, x0, xzr
+
+5:	next
+
+
+// ( ... xt wlst -- ... )
+defword	EXECWORDLIST, "exec-wordlist"
+	fw	SWAP, TOR	// ( lfa r: xt )
+1:	fw	FETCH		// ( lfa )
+	fw	RFETCH		// ( lfa xt )
+	fw	EXECUTE		// ( ... x )
+	fw	ZBRANCH
+	fw	1b - .
+	fw	RFROM, DROP	// ( r: )
+	fw	EXIT
+
+// Search the given wordlist for the FCS
+// ( caddr u wlst --
+//	xt  1  - found immediate
+//	xt -1  - found non immediate
+// 	0      - not found )
+defword	SEARCHWORDLIST, "search-wordlist"
+	fw	TOR				// ( caddr u -- r: wlst )
+	fw	TWODUP				// ( caddr u caddr u )
+	fw	LIT, word_search_buffer		// ( caddr u caddr u dst )
+	fw	DUP, TOR			// ( caddr u caddr u dst -- r: wlst normal_str )
+	fw	NROT				// ( caddr u dst caddr u )
+	fw	TOSCS				// ( caddr u )
+	fw	LIT, word_lower_buffer		// ( caddr u dst )
+	fw	DUP, TOR			// ( caddr u dst -- r: wlst normal_str lower_str )
+	fw	NROT
+	fw	TOSCS				// ( -- r: wlst normal_str lower_str )
+	fw	RFROM, DUP			// ( lower_str lower_str -- r: wlst normal_str )
+	fw	STOLOWER			// ( lower_str -- r: wlst normal_str )
+	fw	RFROM, RFROM			// ( lower_str normal_str wlst )
+	fw	LIT, MATCHXT			// ( lower_str normal_str wlst xt )
+	fw	SWAP				// ( lower_str normal_str xt wlst )
+	fw	EXECWORDLIST			// ( addr addr x x )
+	fw	TWOSWAP, DROP, DROP		// ( x x )
+	fw	QDUP, DROP
+	fw	EXIT
+
+// ( caddr uu -- 0 | xt 1 | xt -1 )
+defword	FINDWORD, "find-word"
+	fw	THEWL
+	fw	SEARCHWORDLIST
+	fw	EXIT
+
+word_search_buffer:	.space	256
+word_lower_buffer:	.space	256
+
+defword	REPL, "repl"
+1:	fw	REFILL
+	fw	ZBRANCH
+	fw	1b - .
+	fw	INTERPRETLINE
+	fw	LIT, ok_msg
+	fw	LIT, ok_msg_len
+	fw	TELL
+	fw	BRANCH
+	fw	1b - .
+	fw	EXIT
+
+.data
+.align 3
+ok_msg:	.string "Ok.\r\n"
+	.equ	ok_msg_len, . - ok_msg
+
+// **** Outer interpreter
+// Repeat until the buffer is empty:
+//   PARSEWORD - lex single word from input
+//   FINDWORD  - Convert from string to exec token
+//   QEXECUTE  - Exec (state == 0 | immediate word) / ?number / compile
+defword	INTERPRETLINE, "interpretline"
+.iword: fw	PARSEWORD	// caddr u
+	fw	QDUP		// caddr u u?
+	fw	ZBRANCH
+	fw	.iexit - .
+	fw	TWODUP		// caddr u caddr u
+	fw	FINDWORD	// caddr u ( 0 | xt n )
+	fw	QEXECUTE
+	fw	BRANCH
+	fw	.iword - .
+.iexit: fw	DROP
+	fw	EXIT
+
+// ( caddr u 0 -- n )		push number
+// ( caddr u xt n -- ... )	execute word
+// if n != 0 then exec or compile
+// otherwise ?number
+defword QEXECUTE, "?execute"
+	fw	QDUP
+	fw	ZBRANCH
+	fw	.qenumber -.
+	// caddr u xt +-1
+	fw	ROT, DROP
+	fw	ROT, DROP	// ( xt +-1 )
+
+	fw	ZLT
+	fw	STATE, FETCH	// Compile if BOTH !immediate and compiling state
+	fw	AND
+
+	fw	ZBRANCH
+	fw	.qeexec - .
+	fw	COMMA
+	fw	EXIT		// Compile and bail
+
+.qeexec:
+	fw	EXECUTE
+	fw	EXIT		// Immediate
+
+.qenumber:
+	fw	QNUMBER
+	fw	ZBRANCH
+	fw	.qeabort - .	// Abort if not a number; unknown word
+
+	fw	STATE, FETCH	// Compiling? Immediate = push num right now; compiling = compile LIT xxx
+	fw	ZBRANCH
+	fw	.eexit - .
+	fw	LITERAL
+
+.eexit: fw	EXIT
+
+.qeabort:
+
+
 
 .equ	USER_INPUT_ID,0
 .equ	EVALUATE_ID,-1
@@ -993,15 +1398,15 @@ defcode	INPLUS, "in+"
 //    + swap		( saddr u )
 // ;
 defword	PARSET, "parse-t"
-fw	TOIN, FETCH
-fw	DUP, TOR, NROT	// >in base limit  r: >in
-fw	TWOTOR		// >in r: 0 base limit
+	fw	TOIN, FETCH
+	fw	DUP, TOR, NROT	// >in base limit  r: >in
+	fw	TWOTOR		// >in r: 0 base limit
 pt_loop:
-fw	DUP, INFETCH	// >in chr flag
-fw	SWAP		// >in flag chr
-fw	TWORFETCH	// >in flag chr lo hi
-fw	WITHIN
-fw	AND		// >in flag
+	fw	DUP, INFETCH	// >in chr flag
+	fw	SWAP		// >in flag chr
+	fw	TWORFETCH	// >in flag chr lo hi
+	fw	WITHIN
+	fw	AND		// >in flag
 	fw	ZBRANCH
 	fw	pt_got - .	// >in, branch if flag 0
 	fw	INC
@@ -1028,6 +1433,8 @@ defcode	PARTOK, "parse-token"
 
 1:	mov	x0, x10
 	bl	inch_impl	// x0 = chr, x1 = valid
+	cmp	x1, xzr
+	beq	2f
 
 	mov	x8, x0
 	mov	x9, x1		// Save chr and flag
@@ -1077,6 +1484,13 @@ defword PARSEWORD, "parse-word"
 	fw	LIT, 0
 	fw	PARTOK
 	fw	INPLUS
+	fw	TWODUP, TWODUP  // ( caddr u caddr u caddr u )
+	fw	LIT, word_msg	// ( caddr u caddr u caddr u msg )
+	fw	NROT		// ( caddr u caddr u msg caddr u )
+	fw	PRINTF3
+	fw	TYPE
+	fw	LIT, pword_msg
+	fw	PRINTF
 	fw	EXIT
 
 // ** Number conversion is hairy
@@ -1113,6 +1527,11 @@ withinRange:
 	cmp	scx0, scx1		// s0 < s1?
 	csetm	x5, lo			// lo = cc flag clear, unsigned <
 	ret
+
+defcode	GETCURRENT, "getcurrent"
+	loadvar	x0, LATEST
+	push	x0
+	next
 
 // ( caddr u -- n true ) if convertible
 // ( caddr u -- caddr u false ) if not convertible
@@ -1333,50 +1752,100 @@ defcode	EXECUTE, "execute"
 	ldr	x0, [x0]
 	br	x0
 
+defword COLDSTART, "*coldstart"
+cold_start:
+	fw	LIT, hello_msg
+	fw	PRINTF
+	fw	REPL
+	fw	EXIT
+
 defcode PRINTF, "printf"
 	pop	x0
-	round_dsp_to_sp
 	bl	tfp_printf
 	next
 
 defcode PRINTF2, "printf2"
 	pop2	x0, x1
-	round_dsp_to_sp
 	bl	tfp_printf
 	next
 
 defcode PRINTF3, "printf3"
 	pop3	x0, x1, x2
-	round_dsp_to_sp
 	bl	tfp_printf
 	next
 
 defcode PRINTF4, "printf4"
 	pop4	x0, x1, x2, x3
-	round_dsp_to_sp
 	bl	tfp_printf
 	next
 
-defword COLDSTART, "*coldstart"
-cold_start:
-	fw	LIT, hello_msg
-	fw	PRINTF
-	fw	LIT, test_msg
-	fw	LIT, test_str
-	fw	LIT, 123456
-	fw	LIT, 'c'
-	fw	PRINTF4
-	fw	BRANCH, -8
+defcode	EMIT, "emit"
+	pop	x0
+	bl	uart_putc
+	next
 
-defword	INTERPRETLINE, "interpretline"
-	fw	LIT, enter_msg
-	fw	PRINTF
-	fw	EXIT
+// ( caddr u -- )
+defcode	TELL, "tell"
+	pop2	scx3, scx4
+
+1:	cmp	scx4, xzr
+	ble	2f
+
+	ldrb	w0, [scx3], #1
+	bl	uart_putc
+	sub	scx4, scx4, #1
+	b	1b
+
+2:	next
+
+defcode	KEY, "key"
+	bl	uart_getc
+	push	x0
+	next
+
+// ( addr len -- )
+defcode TYPE, "type"
+	pop2	x2, x1
+
+1:	cmp	x1, xzr
+	beq	2f
+
+	ldrb	w0, [x2], #1
+	bl	uart_putc
+	sub	x1, x1, #1
+	b	1b
+
+2:	next
+
+// ( -- flag ) Read the next "line" from the input. Flag is true if data was written to the input buffer.
+defcode	REFILL, "refill"
+	loadvar	x0, SOURCEID
+	cmp	x0, xzr
+	bne	.ref_notuser
+
+	ldr	x0, =default_input_buffer
+	ldr	x1, =default_input_buffer_len
+
+	bl	kernel_readline
+
+	savevar	NUMIB, x0
+	savevar	TOIN, xzr
+	mvn	x0, xzr
+	push	x0
+	b	.ref_done
+
+.ref_notuser:
+	push	xzr
+
+.ref_done:
+	next
 
 hello_msg:	.string	"Welcome to Fith!\n"
 test_msg:	.string "This is a printf test: %s %ld %c\nShould read: Test 123456 c\n"
 test_str:	.string	"Test"
 enter_msg:	.string "Interpreter entered"
+word_msg:	.string "Parsed word: 0x%lx %d ("
+pword_msg:	.string ")\n"
 
 defvar	EORO, "*eoro"
 
@@ -1420,7 +1889,7 @@ defvar BASE, "base", 10
 
 defvar CURWORDLIST, "cur-wordlist", var_THEWL
 
-defvar	THEWL, "thewl", 0
+defvar THEWL, "thewl", 0
 
 // Data sections, should be temp until we get proper allocation in place etc.
 .data
