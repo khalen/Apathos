@@ -44,6 +44,15 @@ scw3	.req	w26
 scw4	.req	w27
 scw5	.req	w28
 
+// Make a C ABI call. The stack must be aligned to 16b when we enter C code.
+.macro	call	func_name
+	stp	x29, x30, [sp, #-32]!
+	bl	\func_name
+	ldp	x29, x30, [sp], #32
+.endm
+
+
+
 // Push and pop to the return stack
 .macro	pushrsp	reg
 	str	\reg, [rsp, #-8]!
@@ -154,7 +163,7 @@ str_end_\label:
 
 // Define a new word in "Fith" - subsequent words should be .quad of the CFAs of the words called by this word, ie. the
 // result of normal Fith compilation
-.macro	defword	label, qname, flags=0
+.macro	defword	label, qname, flags=F_BUILTIN
 	create_name	\label, "\qname", \flags
 	// Fith execution codeword
 	.quad	_DOCOL
@@ -162,7 +171,7 @@ str_end_\label:
 
 // Define a new word in assembly - the CFA in this case just the address of the first asm insn in the word
 // continue.
-.macro	defcode	label, qname, flags=0
+.macro	defcode	label, qname, flags=F_BUILTIN
 	create_name	\label, "\qname", \flags
 	// Asm execution codeword
 	.quad	code_\label
@@ -172,7 +181,7 @@ code_\label:
 .endm
 
 // Define a new variable
-.macro defvar label, qname, initial=0, flags=0
+.macro defvar label, qname, initial=0, flags=F_BUILTIN
 	defcode \label, "\qname", \flags
 	ldr	x0, =var_\label
 	push	x0
@@ -195,7 +204,7 @@ var_\label:
 .endm
 
 // Define a new constant
-.macro defconst label, qname, value, flags=0
+.macro defconst label, qname, value, flags=F_BUILTIN
 	defcode \label, "\qname", \flags
 	ldr	x0, =\value
 	push	x0
@@ -236,7 +245,7 @@ defcode	ROT, "rot"	// (a b c -- b c a)
 
 defcode	NROT, "-rot"	// (a b c -- c a b)
 	pop3	x2, x1, x0
-	pop3	x0, x2, x1
+	push3	x0, x2, x1
 	next
 
 defcode	NIP, "nip"	// (a b -- b)
@@ -575,14 +584,14 @@ defcode UMIN, "umin"
 // : WITHIN ( test low high -- flag ) OVER - >R - R> U< ;
 defcode	WITHIN, "within"
 	pop3	x0, x1, x2		// x0 = test, x1 = low, x2 = high
-	bl	within_impl
+	call	within_impl
 	push	x0
 	next
 
 within_impl:
 	sub	x3, x2, x1		// x3 = high - low
 	sub	x4, x0, x1		// x4 = test - low
-	cmp	x3, x4			// x3 < x4?
+	cmp	x4, x3			// x3 < x4?
 	csetm	x0, lo			// lo = cc flag clear, unsigned <
 	ret
 
@@ -935,7 +944,7 @@ defword CCOMMA, "c,"
 	fw	CSTORE
 	fw	EXIT
 
-defword LITERAL, "literal", F_IMMEDIATE
+defword LITERAL, "literal", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, LIT	// Well that's fun
 	fw	EXIT
 
@@ -995,15 +1004,21 @@ defword COLON, ":"
 	fw	KET
 	fw	EXIT
 
-defword	SEMIC, ";", F_IMMEDIATE
+defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, EXIT
 	fw	COMMA
 	fw	FALSE
 	fw	STATE, STORE
 	fw	EXIT
 
+defword LAST, "last"
+	fw	GETCURRENT
+	fw	LIT, 8
+	fw	ADD
+	fw	EXIT
+
 defword	IMMEDIATE, "immediate"
-	fw	LATEST
+	fw	LAST
 	fw	DUP, CFETCH
 	fw	LIT, F_IMMEDIATE
 	fw	OR
@@ -1017,7 +1032,7 @@ defword	IMMEDIATE, "immediate"
 // 	(string) + (alignment)
 // T:	LIT, addr
 // 	LIT, u
-defword SLITERAL, "sliteral", F_IMMEDIATE
+defword SLITERAL, "sliteral", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, BRANCH, COMMA
 	fw	DUP
 	fw	CELLPLUS
@@ -1034,7 +1049,7 @@ defword SLITERAL, "sliteral", F_IMMEDIATE
 // ( addr u -- ) 	Given a FCS, translate any upper case letters to lower case. Note: In place. Note note: Ascii only. Note note note: lame.
 defcode	FSTOLOWER, "fstolower"
 	pop2	x0, x1
-	bl	fstolower_impl
+	call	fstolower_impl
 	next
 
 fstolower_impl:
@@ -1061,8 +1076,8 @@ fstolower_impl:
 
 // ( addr -- ) 	Given a SCS, translate any upper case letters to lower case. Note: In place. Note note: Ascii only. Note note note: lame.
 defcode	STOLOWER, "stolower"
-	pop2	x0
-	bl	stolower_impl
+	pop	x0
+	call	stolower_impl
 	next
 
 stolower_impl:
@@ -1074,7 +1089,7 @@ stolower_impl:
 // ( caddr caddr u -- ) Takes dest, src, len -- makes a short counted string at dest
 defcode	TOSCS, "#toscs"
 	pop3	x0, x1, x2
-	bl	toscs_impl
+	call	toscs_impl
 	next
 
 toscs_impl:
@@ -1086,17 +1101,45 @@ toscs_impl:
 	ldrb	w3, [x1], #1
 	strb	w3, [x0], #1
 	sub	x2, x2, #1
-	b	1f
+	b	1b
 
-2:	// Clear to start of next word
-	and	x2, x0, #7
-3:	cmp	x2, xzr
-	beq	4f
+	// Clear to start of next full word
+2:	ands	x3, x0, #0xF
+	beq	3f
 	strb	wzr, [x0], #1
-	sub	x2, x2, #1
-	b	3b
+	b	2b
 
-4:	ret
+3:	ret
+
+// ( nameaddr -- ) Print a name pointed to by addr. Names have flags in the upper bits, so the length gets masked
+// making the max len of a name 32 (0x1f)
+defcode NTELL, "#ntell"
+	pop	x0
+	call	ntell_impl
+	next
+
+ntell_impl:
+	mov	x10, x0
+	ldrb	w4, [x10], #1
+	and	w4, w4, #0x1f
+
+1:	cmp	x4, xzr
+	beq	2f
+
+	sub	x4, x4, #1
+	ldrb	w0, [x10], #1
+	call	uart_putb
+	b	1b
+
+2:	ret
+
+defcode	DOT, "."
+	pop	x0
+	call 	dot_impl
+	next
+
+dot_impl:
+
 
 // Note: caddrs here are SCS
 // ( caddr caddr lfa --		lowered normal len lfa --
@@ -1111,7 +1154,7 @@ defcode	MATCHXT, "matchxt"
 .global matchxt_impl
 matchxt_impl:
 	// If lfa is null, we hit the end of the list
-	cmp	x2, xzr
+	cmp	x0, xzr
 	bne	1f
 
 	push4	x2, x1, xzr, xzr
@@ -1120,38 +1163,62 @@ matchxt_impl:
 	b	5f
 
 	// Use lower buf if this is a builtin word, otherwise normal buf
-	ldrb	w9, [x0]
+1:	ldrb	w9, [x0, #8]
 	tst	w9, F_BUILTIN
 	csel	x10, x2, x1, ne
 
-	// Make mask for first word - top byte is flags + len, need to mask off flags
-	mov	x8, #-1			// x5 = 0xFFFFFFFFFFFFFFFF
-	movk	x8, #0x1FFF, LSL #48	// x5 = 0x1FFFFFFFFFFFFFFF
+#if 0
+	// Print test : dict
+	mov	scx3, x0
+	mov	scx4, x1
+	mov	scx5, x2
+	mov	scx2, x10
+
+	mov	x0, x10
+	call	ntell_impl
+
+	mov	x0, #':'
+	call	uart_putc
+
+	mov	x0, #' '
+	call	uart_putc
+
+	mov	x0, scx3
+	add	x0, x0, #8	// Skip to name word
+	call	ntell_impl
+	call	cr_impl
+
+	mov	x10, scx2
+	mov	x2, scx5
+	mov	x1, scx4
+	mov	x0, scx3
+	/////////
+#endif
 
 	// Fetch first comparison words - will be at the word after the lfa
-	ldr	x3, [x10, #8]
+	ldr	x3, [x10]
 	ldr	x4, [x0, #8]
 
-	// Mask flags from the first comparison word
-	and	x7, x3, x5
-	cmp	x7, x4
+	// Mask flags from the first comparison word (because we're little endian, this is actually in the low byte
+	// of the reg even though it's first in memory)
+	movn	x8, #(F_IMMEDIATE | F_BUILTIN | F_HIDDEN)
+	and	x7, x4, x8
+	cmp	x7, x3
 	bne	4f		// No match
 
 	// Check second word - faster to check than take a branch? Maybe not, since we have to fetch the next word
-	ldr	x5, [x10, #16]
+	ldr	x5, [x10, #8]
 	ldr	x6, [x0, #16]
 	cmp	x5, x6
 	bne	4f		// No match
 
 	// Match! Check if it's immediate
-	mov	x9, #F_IMMEDIATE
-	lsl	x9, x9, #48
-	tst	x7, x9
-	beq	1f
-	mov	x3, #1
-	b	2f
-1:	mov	x3, #-1
-2:	add	x0, x0, #24		// Move to the cfa of this word
+	mov	scx0, #-1
+	mov	scx1, #1
+	tst	x9, #F_IMMEDIATE
+	csel	x3, scx0, scx1, eq
+
+3:	add	x0, x0, #24		// Move to the cfa of this word
 
 	push3	x2, x1, x0
 	push	x3
@@ -1203,7 +1270,7 @@ defword	SEARCHWORDLIST, "search-wordlist"
 
 // ( caddr uu -- 0 | xt 1 | xt -1 )
 defword	FINDWORD, "find-word"
-	fw	THEWL
+	fw	GETCURRENT
 	fw	SEARCHWORDLIST
 	fw	EXIT
 
@@ -1224,7 +1291,7 @@ defword	REPL, "repl"
 
 .data
 .align 3
-ok_msg:	.string "Ok.\r\n"
+ok_msg:	.ascii "Ok.\n"
 	.equ	ok_msg_len, . - ok_msg
 
 // **** Outer interpreter
@@ -1283,7 +1350,12 @@ defword QEXECUTE, "?execute"
 .eexit: fw	EXIT
 
 .qeabort:
-
+	fw	LIT, noword_msg
+	fw	LIT, noword_msg_len
+	fw	TELL
+	fw	TELL
+	fw	CR
+	fw	ABORT
 
 
 .equ	USER_INPUT_ID,0
@@ -1340,7 +1412,7 @@ defcode SOURCE_ID, "source-id"		// ( -- 0 | -1 )
 defcode INFETCH, "in@"
 	pop	x0
 
-	bl	inch_impl
+	call	inch_impl
 
 	push2	x0, x1
 	next
@@ -1432,7 +1504,7 @@ defcode	PARTOK, "parse-token"
 	mov	x13, x10	// Remember original >in
 
 1:	mov	x0, x10
-	bl	inch_impl	// x0 = chr, x1 = valid
+	call	inch_impl	// x0 = chr, x1 = valid
 	cmp	x1, xzr
 	beq	2f
 
@@ -1441,7 +1513,7 @@ defcode	PARTOK, "parse-token"
 
 	mov	x1, x11
 	mov	x2, x12
-	bl	within_impl
+	call	within_impl
 
 	ands	x0, x0, x9
 	beq	2f		// 0 = done
@@ -1484,13 +1556,12 @@ defword PARSEWORD, "parse-word"
 	fw	LIT, 0
 	fw	PARTOK
 	fw	INPLUS
-	fw	TWODUP, TWODUP  // ( caddr u caddr u caddr u )
-	fw	LIT, word_msg	// ( caddr u caddr u caddr u msg )
-	fw	NROT		// ( caddr u caddr u msg caddr u )
-	fw	PRINTF3
-	fw	TYPE
-	fw	LIT, pword_msg
-	fw	PRINTF
+//	fw	TWODUP
+//	fw	LIT, word_msg	// ( caddr u caddr u msg )
+//	fw	PRINTF
+//	fw	TELL
+//	fw	LIT, pword_msg
+//	fw	PRINTF
 	fw	EXIT
 
 // ** Number conversion is hairy
@@ -1524,30 +1595,17 @@ convertChar:
 withinRange:
 	sub	scx0, x16, x15		// s0 = high - low
 	sub	scx1, x4, x15		// s1 = test - low
-	cmp	scx0, scx1		// s0 < s1?
+	cmp	scx1, scx0		// s0 < s1?
 	csetm	x5, lo			// lo = cc flag clear, unsigned <
 	ret
 
-defcode	GETCURRENT, "getcurrent"
-	loadvar	x0, LATEST
-	push	x0
-	next
+defword	GETCURRENT, "get-current"
+	fw	CURRENT
+	fw	FETCH
+	fw	EXIT
 
 // ( caddr u -- n true ) if convertible
 // ( caddr u -- caddr u false ) if not convertible
-// 'a'
-//
-// $a
-// $-a
-// %1101
-// -52
-// 42
-//x0		x1		x4	x5	x6	x7	x10	x11
-//cur		x1 -> end		0	0		x0	x1
-//cur++				'
-
-//cur		x1 -> end		0	0		x0	x1
-//cur++							16
 defcode	QNUMBER, "?number"
 	pop2	x0, x1
 
@@ -1572,7 +1630,7 @@ defcode	QNUMBER, "?number"
 	cmp	w4, #'\''
 	bne	.notCharNum
 
-	bl	convertChar
+	call	convertChar
 	cmp	x5, #0
 	beq	.notConvertible
 	b	.convertible
@@ -1624,7 +1682,7 @@ defcode	QNUMBER, "?number"
 	// Decimal digit?
 	mov	x15, #'0'
 	mov	x16, #'9' + 1
-	bl	withinRange
+	call	withinRange
 	cmp	x5, xzr
 	beq	.notDecDigit
 
@@ -1635,7 +1693,7 @@ defcode	QNUMBER, "?number"
 	// Upper case alphabetic?
 	mov	x15, #'A'
 	mov	x16, #'Z' + 1
-	bl	withinRange
+	call	withinRange
 	cmp	x5, xzr
 	beq	.notAlphaDigit
 
@@ -1646,7 +1704,7 @@ defcode	QNUMBER, "?number"
 	// Lower case alphabetic?
 	mov	x15, #'a'
 	mov	x16, #'z' + 1
-	bl	withinRange
+	call	withinRange
 	cmp	x5, xzr
 	beq	.notConvertible
 
@@ -1665,7 +1723,7 @@ defcode	QNUMBER, "?number"
 	beq	.convertible
 
 	// Nope, load the next one
-	ldr	x4, [x0], #1
+	ldrb	w4, [x0], #1
 	b	.handleDigit
 
 .convertible:
@@ -1714,7 +1772,7 @@ defcode	RESTOREINPUT, "restore-input"
 
 // ( ib #ib >in id -- )		// Set the input state to >in, #ib, ib, id
 // 	just sets up the return stack with expected stuff and runs RESTOREINPUT.
-defword	SETINPUT, "set-input"
+defcode	SETINPUT, "set-input"
 	pop4	x0, x1, x2, x3
 
 	pushrsp	x0
@@ -1737,7 +1795,7 @@ defword EVALUATE, "evaluate"
 	fw	RESTOREINPUT
 	fw	EXIT
 
-defcode	STARDOCOL, "*docol"
+defword	STARDOCOL, "*docol"
 	fw	LIT, _DOCOL
 	fw	EXIT
 
@@ -1752,37 +1810,52 @@ defcode	EXECUTE, "execute"
 	ldr	x0, [x0]
 	br	x0
 
+defword WARMSTART, "*warmstart"
+	fw	REPL
+	fw	EXIT
+
 defword COLDSTART, "*coldstart"
 cold_start:
 	fw	LIT, hello_msg
 	fw	PRINTF
+	fw	LIT, WARMSTART
+	fw	STARVRESET, STORE
 	fw	REPL
 	fw	EXIT
 
 defcode PRINTF, "printf"
 	pop	x0
-	bl	tfp_printf
+	call	tfp_printf
+	next
+
+defcode PRINTF1, "printf1"
+	pop2	x0, x1
+	call	tfp_printf
 	next
 
 defcode PRINTF2, "printf2"
-	pop2	x0, x1
-	bl	tfp_printf
+	pop3	x0, x1, x2
+	call	tfp_printf
 	next
 
 defcode PRINTF3, "printf3"
-	pop3	x0, x1, x2
-	bl	tfp_printf
-	next
-
-defcode PRINTF4, "printf4"
 	pop4	x0, x1, x2, x3
-	bl	tfp_printf
+	call	tfp_printf
 	next
 
 defcode	EMIT, "emit"
 	pop	x0
-	bl	uart_putc
+	call	uart_putc
 	next
+
+defcode CR, "cr"
+	call	cr_impl
+	next
+
+cr_impl:
+	mov	x0, #10
+	call	uart_putb
+	ret
 
 // ( caddr u -- )
 defcode	TELL, "tell"
@@ -1792,14 +1865,14 @@ defcode	TELL, "tell"
 	ble	2f
 
 	ldrb	w0, [scx3], #1
-	bl	uart_putc
+	call	uart_putc
 	sub	scx4, scx4, #1
 	b	1b
 
 2:	next
 
 defcode	KEY, "key"
-	bl	uart_getc
+	call	uart_getc
 	push	x0
 	next
 
@@ -1811,7 +1884,7 @@ defcode TYPE, "type"
 	beq	2f
 
 	ldrb	w0, [x2], #1
-	bl	uart_putc
+	call	uart_putc
 	sub	x1, x1, #1
 	b	1b
 
@@ -1826,7 +1899,7 @@ defcode	REFILL, "refill"
 	ldr	x0, =default_input_buffer
 	ldr	x1, =default_input_buffer_len
 
-	bl	kernel_readline
+	call	kernel_readline
 
 	savevar	NUMIB, x0
 	savevar	TOIN, xzr
@@ -1840,12 +1913,18 @@ defcode	REFILL, "refill"
 .ref_done:
 	next
 
+defcode ABORT, "abort"
+	b 	abort
+	next
+
 hello_msg:	.string	"Welcome to Fith!\n"
 test_msg:	.string "This is a printf test: %s %ld %c\nShould read: Test 123456 c\n"
 test_str:	.string	"Test"
 enter_msg:	.string "Interpreter entered"
-word_msg:	.string "Parsed word: 0x%lx %d ("
+word_msg:	.string "Parsed word: ("
 pword_msg:	.string ")\n"
+noword_msg:	.ascii "? "
+	        .equ	noword_msg_len, . - noword_msg
 
 defvar	EORO, "*eoro"
 
@@ -1854,6 +1933,7 @@ defvar	EORO, "*eoro"
 reset_vector:	.quad	0
 
 .align 4
+.data
 data_segment:
 
 // **** End of read-only dictionary section ****
@@ -1875,21 +1955,19 @@ defvar	STATE, "state"
 // CP - Points to the next free byte of "compilation" memory
 defvar CP, "cp"
 
-// LATEST - Points to the most recently defined dictionary entry (head of the dict linked list)
-defvar LATEST,"latest", name_EORO	// EORO (end of read only) must be the last word defined to properly link to user definitionss
-
 // S0 - Stores the address of the top of the data (parameter) stack.
 defvar S0, "s0"
 
 // S0 - Stores the address of the top of the data (parameter) stack.
 defvar R0, "r0"
 
+// SP - Stores the initial address of the SP register
+defvar SP, "sp"
+
 // BASE - the current numerical base for converting literals
 defvar BASE, "base", 10
 
-defvar CURWORDLIST, "cur-wordlist", var_THEWL
-
-defvar THEWL, "thewl", 0
+defvar CURRENT, "current", name_THEWL
 
 // Data sections, should be temp until we get proper allocation in place etc.
 .data
@@ -1904,17 +1982,25 @@ data_stack:
 	.space	DEFAULT_DSTACK_SIZE
 	.equ data_stack_top, .
 
+defvar THEWL, "thewl"
 
 // *** Cold start and fundamentals
 .text
 .align 3
 .global fith_boot
 fith_boot:
+	mov	x0, sp
+	savevar	SP, x0
+
+abort:
 	ldr	dsp, =data_stack_top
 	savevar	S0, dsp
 
 	ldr	rsp, =return_stack_top
 	savevar	R0, rsp
+
+	loadvar	x0, SP
+	mov	sp, x0
 
 reset:
 	savevar	STATE, xzr
