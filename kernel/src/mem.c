@@ -21,6 +21,21 @@ void *memzero(void *dest, u64 n)
 	return dest;
 }
 
+void *memset(void *dest, u64 n, u64 cIn)
+{
+	u8 c = (u8)(cIn & 0xFF);
+
+	u8* bDest = (u8 *) dest;
+	u8* bEnd  = bDest + n;
+
+	while (bDest < bEnd)
+	{
+		*bDest++ = c;
+	}
+
+	return dest;
+}
+
 void *memcpy(void *dest, const void* src, u64 n)
 {
 	u8* bDest = (u8 *) dest;
@@ -32,6 +47,45 @@ void *memcpy(void *dest, const void* src, u64 n)
 	}
 
 	return dest;
+}
+
+void *memmove(void *dest, const void* src, u64 n)
+{
+	u8* from = (u8*) src;
+	u8* to = (u8*) dest;
+
+	if (from == to || n == 0)
+		return dest;
+	if (to > from && to-from < (int)n) {
+		/* to overlaps with from */
+		/*  <from......>         */
+		/*         <to........>  */
+		/* copy in reverse, to avoid overwriting from */
+		int i;
+		for(i=n-1; i>=0; i--)
+			to[i] = from[i];
+		return dest;
+	}
+	if (from > to && from-to < (int)n) {
+		/* to overlaps with from */
+		/*        <from......>   */
+		/*  <to........>         */
+		/* copy forwards, to avoid overwriting from */
+		size_t i;
+		for(i=0; i<n; i++)
+			to[i] = from[i];
+		return dest;
+	}
+	memcpy(dest, src, n);
+	return dest;
+}
+
+u64 strlen(const char *str)
+{
+	ssize_t i = 0;
+	for (; *str != 0; str++, i++)
+		;
+	return i;
 }
 
 // MMU linear mapping page table init stuff //

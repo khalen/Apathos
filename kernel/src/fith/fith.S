@@ -1,4 +1,4 @@
-// This is Fith, an arm64 Forth variant. It is intended to have the minimum amount of primitive words to be
+// This is Fith, an arm64 Forth variant. It is intended to have the minimum amount of primitive words to be:
 // reasonably fast, while remaining small enough to reason about. Inspired by Jonesforth, an amazing 32 bit I86
 // literate Forth written in assembly. We use a different dictionary format for and a couple of tricks for
 // something reasonably approaching efficiency,
@@ -112,14 +112,6 @@ scw5	.req	w28
 	ldr	\reg3, [dsp], #8
 .endm
 
-// This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
-// "assemble" it into other words without having to keep it in sync in more than one place.
-.macro	next_impl, wrapper:vararg=
-	\wrapper ldr	x0, [fip], #8
-	\wrapper ldr	x1, [x0]
-	\wrapper br	x1
-.endm
-
 .macro	next
 	b	_NEXT
 .endm
@@ -135,27 +127,33 @@ scw5	.req	w28
 //   also identical in the 1st 15 characters, but this gives us enough room in the dict to implement whatever
 //   else we want later (hashed strings, symbol table entries, etc.)
 // 0: [8b| Link word]            -> Points to link field of next word
-// 1: [1b| Len flags, 7b| Name0] -> 1 byte length + flags, 1st 7 chars of name
-// 2: [8b| Name1]		 -> Next 8 chars of name
-// 3: [8b| Codeword]		 -> Addr of DOCOL (below) or a jump to the immediately following insn
+// 1: [1b| Name len + flags]
+// 2: [7b| Name1]		 -> 1st 8 chars of name
+// 3: [8b| Name2]		 -> 2nd 8 chars of name
+// 4: [8b| Codeword]		 -> Addr of DOCOL (below) or a jump to the immediately following insn
 
 	.set	dict_link, 0	// Dict terminator
 
 .macro create_name label, qname, flags
-.section .rodata
-.align 3
+.data
+.align 3, 0
 .global	name_\label
 
-name_\label:
+name_\label\():
 	.quad	dict_link
 	.set	dict_link, name_\label		// Link to previous word and update address
-	.byte	\flags | (str_end_\label - str_\label)
-str_\label:
+	.set	nlen_tempmacro_foo, (str_end_\label - str_\label)
+	.byte	\flags | nlen_tempmacro_foo
+str_\label\():
 	.ascii	"\qname"
-str_end_\label:
-	.align 4
+str_end_\label\():
+.align 3, 0
+.iflt	(nlen_tempmacro_foo - 8)
+	.quad 0
+.endif
+.align 3, 0
 .global \label
-\label:
+\label\():
 	// Code word will follow
 .endm
 
@@ -167,6 +165,8 @@ str_end_\label:
 	create_name	\label, "\qname", \flags
 	// Fith execution codeword
 	.quad	_DOCOL
+.global	code_\label
+data_\label:
 .endm
 
 // Define a new word in assembly - the CFA in this case just the address of the first asm insn in the word
@@ -182,12 +182,11 @@ code_\label:
 
 // Define a new variable
 .macro defvar label, qname, initial=0, flags=F_BUILTIN
-	defcode \label, "\qname", \flags
-	ldr	x0, =var_\label
-	push	x0
-	next
+	create_name	\label, "\qname", \flags
+	// Variable definition
+	.quad	_DOVAR
 .data
-.align 3
+.align 3, 0
 .global var_\label
 var_\label:
 	.quad	\initial
@@ -843,18 +842,15 @@ defcode RSPSTORE, "rsp!"
 	pop	rsp
 	next
 
-defcode	HERE, "here"
-	loadvar x0, CP
-	push	x0
-	next
+defword	HERE, "here"
+	fw	CP
+	fw	FETCH
+	fw	EXIT
 
-defcode ALLOT, "allot"
-	pop	x0
-	loadvar	x1, CP
-	add	x2, x1, x0
-	savevar	CP, x2
-	push	x1
-	next
+defword ALLOT, "allot"
+	fw	CP
+	fw	PLUSSTORE
+	fw	EXIT
 
 defcode ALIGN, "align"
 	loadvar	x0, CP
@@ -895,7 +891,7 @@ defcode TOCFA, ">cfa"
 	push	x0
 	next
 
-// (lfa -- cfa) Given a link field address of a dict word, convert that into a code field address
+// (cfa -- lfa) Given a CFA / xt of a word, move to its link field address
 defcode CFAFROM, "cfa>"
 .fcfacode:
 	pop	x0
@@ -903,17 +899,18 @@ defcode CFAFROM, "cfa>"
 	push	x0
 	next
 
+// ( cfa -- data ) Given the CFA of a word, move to the data (body) field
 defcode TOBODY, ">body"
 .bodycode:
 	pop	x0
-	add	x0, x0, #32
+	add	x0, x0, #8
 	push	x0
 	next
 
 defcode BODYFROM, "body>"
 .fbodycode:
 	pop	x0
-	sub	x0, x0, #32
+	sub	x0, x0, #8
 	push	x0
 	next
 
@@ -946,9 +943,10 @@ defword CCOMMA, "c,"
 
 defword LITERAL, "literal", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, LIT	// Well that's fun
+	fw	COMMA, COMMA
 	fw	EXIT
 
-defword BRA, "["
+defword BRA, "[", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, 0
 	fw	STATE
 	fw	STORE
@@ -960,17 +958,130 @@ defword KET, "]"
 	fw	STORE
 	fw	EXIT
 
+defcode	BREAK, "brk"
+	pop	x0
+	push	x0
+	next
+
+defcode PWORDASCII, ".wordascii"
+	pop	x16
+	mov	x17, #8
+	mov	x3, #'.'
+	mov	x0, #'/'
+	call	uart_putb
+
+1:	cmp	x17, xzr
+	beq	2f
+
+	mov	x3, #'.'
+	and	x2, x16, #0xFF
+	cmp	x2, #' '
+	csel	x0, x3, x2, lt
+	cmp	x2, #127
+	csel	x0, x3, x0, eq
+	call	uart_putb
+	lsr	x16, x16, #8
+	sub	x17, x17, 1
+	b	1b
+2:	mov	x0, #'/'
+	call	uart_putb
+	next
+
+defcode PWORDBYTES, ".wordbytes"
+	pop	x11
+	mov	x10, #8
+
+1:	cmp	x10, xzr
+	beq	2f
+	ldr	x0, =bword_str
+	and	x1, x11, #0xFF
+	call	printf_
+	lsr	x11, x11, #8
+	sub	x10, x10, 1
+	b	1b
+2:	next
+
+.section .rodata
+bword_str:	.string "%02llX "
+.section .text
+
+defcode PWORD, ".word"
+	pop	x1
+	ldr	x0, =xword_str
+	call	printf_
+	next
+
+.section .rodata
+xword_str:	.string "%016llX "
+.section .text
+
+defcode	DEPTH, "depth"
+	loadvar	x0, S0
+	sub	x0, x0, dsp
+	asr	x0, x0, #3
+	sub	x0, x0, #1
+	push	x0
+	next
+
+defword DOTS, ".s"
+	fw	DSPFETCH
+	fw	LIT, 'S', EMIT, LIT, ':', EMIT, CR
+	fw	DEPTH, PMEM
+	fw	EXIT
+
+defword DUMPVAL, "dumpval"
+	fw	DUP, PWORD		// ( nc addr )
+	fw	LIT, ':', EMIT
+	fw	LIT, 32, EMIT
+	fw	DUP, FETCH		// ( nc addr @addr )
+	fw	DUP, PWORD		// ( nc addr @addr )
+	fw	DUP, PWORDBYTES		// ( nc addr @addr )
+	fw	PWORDASCII		// ( nc addr )
+	fw	CR
+	fw	EXIT
+
+// ( addr cnt -- )
+defword PMEM, ".mem"
+1:	fw	QDUP			// ( addr cnt|0 cnt? -- )
+	fw	ZBRANCH
+	fw	2f - .
+	fw	DEC			// ( addr (cnt-1) )
+	fw	SWAP			// ( nc addr )
+	fw	DUMPVAL
+	fw	INCX8			// ( nc addr+8 )
+	fw	SWAP			// ( naddr nc )
+	fw	BRANCH
+	fw	1b - .
+
+2:	fw	DROP
+	fw	CR
+	fw	EXIT
+
+pword_str:	.string "%08llx "
+
+defword DD, "dd"
+	fw	EMIT
+	fw	LIT, ':', EMIT
+	fw	CR
+	fw	EXIT
+
 // ( addr u -- ) Create dict entry for word on stack
 defword STARCREATE, "*create"
+	fw	LIT, 'A', DD, DOTS
 	fw	HERE, TOR
-	fw	GETCURRENT, FETCH	// ( addr r: newc )
+	//	Link word
+	fw	GETCURRENT, FETCH	// ( addr u prevword r: newc )
 	fw	COMMA			// Link field
 
+	//	nameptr - 1st name word
 	// Name len byte
 	fw	DUP			// ( addr u u )
 	fw	CCOMMA			// ( addr u )
+
+	//	Remember whether or not the name is "short", that is, whether we will need
+	//	to add an additional word of padding to retain the header layout
 	fw	DUP
-	fw	LIT, 7, GT, TOR		// ( addr u r: newc gflag )
+	fw	LIT, 7, GT, TOR		// ( addr u r: newc (u > 7) )
 
 	// Name words
 	fw	LIT, 15			// Max len of name
@@ -979,36 +1090,50 @@ defword STARCREATE, "*create"
 	fw	SWAP			// ( addr here u|15 )
 	fw	CMOVE
 
+	fw	LIT, 'B', DD, DOTS
+
 	// Align, then skip an extra word if the name was short
-	fw	LIT, 1, CELLS, ALLOT, ALIGN
+	fw	LIT, 1, CELLS
+	fw	ALLOT
+	fw	ALIGN
 	fw	RFROM
+	fw	LIT, 'C', DD, DOTS
+
 	fw	ZBRANCH
-	fw	LIT, 1f - .
-	fw	LIT, 1, CELLS, ALLOT
+	fw	1f - .
+
+	fw	LIT, 1,	CELLS
+	fw	ALLOT
+
+	fw	LIT, 'D', DD, DOTS
 
 	// Code field
-1:	fw	LIT, _DOCOL
+1:	fw	LIT, _DOVAR
+	fw	COMMA
 
 	// Update last
 	fw	RFROM
 	fw	GETCURRENT, STORE
+	fw	LIT, 'e', DD, DOTS
 	fw	EXIT
 
-defword	CREATE, "CREATE"
+defword	CREATE, "create"
 	fw	PARSEWORD
 	fw	STARCREATE
 	fw	EXIT
 
 defword COLON, ":"
 	fw	CREATE
+	fw	LIT, _DOCOL	// Change the cfa of the word just created to _DOCOL from _DOVAR
+	fw	HERE, BODYFROM
+	fw	STORE
 	fw	KET
 	fw	EXIT
 
 defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, EXIT
 	fw	COMMA
-	fw	FALSE
-	fw	STATE, STORE
+	fw	BRA
 	fw	EXIT
 
 defword LAST, "last"
@@ -1133,13 +1258,43 @@ ntell_impl:
 
 2:	ret
 
-defcode	DOT, "."
-	pop	x0
-	call 	dot_impl
-	next
+defword TESTER4, "tester4"
+	fw	LIT, tester4_msg
+	fw	LIT, tester4_msg_len
+	fw	TELL
+	fw	EXIT
+tester4_msg:	.ascii "**TEST 4\n"
+tester4_msg_len = . - tester4_msg
 
-dot_impl:
+defword TESTER3, "tester3"
+	fw	LIT, tester3_msg
+	fw	LIT, tester3_msg_len
+	fw	TELL
+	fw	EXIT
+tester3_msg:	.ascii "**TEST 3\n"
+tester3_msg_len = . - tester3_msg
 
+defword TESTER2, "tester2"
+	fw	LIT, tester2_msg
+	fw	LIT, tester2_msg_len
+	fw	TELL
+	fw	EXIT
+tester2_msg:	.ascii "**TEST 2\n"
+tester2_msg_len = . - tester2_msg
+
+defword TESTER, "tester"
+	fw	LIT, tester_msg
+	fw	LIT, tester_msg_len
+	fw	TELL
+	fw	EXIT
+tester_msg:	.ascii "**TEST 1\n"
+tester_msg_len = . - tester_msg
+
+defword RECURSE, "recurse", F_IMMEDIATE | F_BUILTIN
+	fw	GETCURRENT, FETCH
+	fw	TOCFA
+	fw	COMMA
+	fw	EXIT
 
 // Note: caddrs here are SCS
 // ( caddr caddr lfa --		lowered normal len lfa --
@@ -1164,10 +1319,12 @@ matchxt_impl:
 
 	// Use lower buf if this is a builtin word, otherwise normal buf
 1:	ldrb	w9, [x0, #8]
+	mov	x12, x9
 	tst	w9, F_BUILTIN
 	csel	x10, x2, x1, ne
+	and	x9, x9, #0x1f
 
-#if 0
+#if 1
 	// Print test : dict
 	mov	scx3, x0
 	mov	scx4, x1
@@ -1206,6 +1363,10 @@ matchxt_impl:
 	cmp	x7, x3
 	bne	4f		// No match
 
+	// Skip comparing second word if 1st is short
+	cmp	x9, #7
+	bls	2f
+
 	// Check second word - faster to check than take a branch? Maybe not, since we have to fetch the next word
 	ldr	x5, [x10, #8]
 	ldr	x6, [x0, #16]
@@ -1213,10 +1374,11 @@ matchxt_impl:
 	bne	4f		// No match
 
 	// Match! Check if it's immediate
-	mov	scx0, #-1
+matchxt_matched:
+2:	mov	scx0, #-1
 	mov	scx1, #1
-	tst	x9, #F_IMMEDIATE
-	csel	x3, scx0, scx1, eq
+	tst	x12, #F_IMMEDIATE
+	csel	x3, scx0, scx1, ne
 
 3:	add	x0, x0, #24		// Move to the cfa of this word
 
@@ -1278,7 +1440,8 @@ word_search_buffer:	.space	256
 word_lower_buffer:	.space	256
 
 defword	REPL, "repl"
-1:	fw	REFILL
+1:	fw	DOTS
+	fw	REFILL
 	fw	ZBRANCH
 	fw	1b - .
 	fw	INTERPRETLINE
@@ -1330,6 +1493,7 @@ defword QEXECUTE, "?execute"
 
 	fw	ZBRANCH
 	fw	.qeexec - .
+	fw	LIT, 'C', DD
 	fw	COMMA
 	fw	EXIT		// Compile and bail
 
@@ -1345,6 +1509,7 @@ defword QEXECUTE, "?execute"
 	fw	STATE, FETCH	// Compiling? Immediate = push num right now; compiling = compile LIT xxx
 	fw	ZBRANCH
 	fw	.eexit - .
+	fw	LIT, 'C', DD
 	fw	LITERAL
 
 .eexit: fw	EXIT
@@ -1354,7 +1519,6 @@ defword QEXECUTE, "?execute"
 	fw	LIT, noword_msg_len
 	fw	TELL
 	fw	TELL
-	fw	CR
 	fw	ABORT
 
 
@@ -1556,12 +1720,6 @@ defword PARSEWORD, "parse-word"
 	fw	LIT, 0
 	fw	PARTOK
 	fw	INPLUS
-//	fw	TWODUP
-//	fw	LIT, word_msg	// ( caddr u caddr u msg )
-//	fw	PRINTF
-//	fw	TELL
-//	fw	LIT, pword_msg
-//	fw	PRINTF
 	fw	EXIT
 
 // ** Number conversion is hairy
@@ -1663,6 +1821,9 @@ defcode	QNUMBER, "?number"
 	loadvar	x7, BASE
 
 .checkMinus:
+	// x6 - the number we are building up
+	mov	x6, xzr
+
 	cmp	x4, '-'
 	csetm	x12, eq		// x12 true if '-' symbol present
 	bne	.handleDigit
@@ -1672,9 +1833,6 @@ defcode	QNUMBER, "?number"
 	bhs	.notConvertible
 
 	ldrb	w4, [x0], #1
-
-	// x6 - the number we are building up
-	mov	x6, xzr
 
 .handleDigit:
 	// Convert x4 (current char) into a number: '0' - '9' -> 0..9, 'A' - 'Z' or 'a' - 'z' -> 10..25
@@ -1807,40 +1965,43 @@ defword STARVRESET, "*vreset"
 //   in the called xt to return to execute's caller.
 defcode	EXECUTE, "execute"
 	pop	x0
-	ldr	x0, [x0]
-	br	x0
+	ldr	x1, [x0]
+	br	x1
 
 defword WARMSTART, "*warmstart"
+	fw	DOTS
 	fw	REPL
 	fw	EXIT
 
 defword COLDSTART, "*coldstart"
 cold_start:
+	fw	DOTS
 	fw	LIT, hello_msg
-	fw	PRINTF
+	fw	PRINTF_
+	fw	DOTS
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
 	fw	REPL
 	fw	EXIT
 
-defcode PRINTF, "printf"
+defcode PRINTF_, "printf"
 	pop	x0
-	call	tfp_printf
+	call	printf_
 	next
 
-defcode PRINTF1, "printf1"
+defcode PRINTF_1, "printf1"
 	pop2	x0, x1
-	call	tfp_printf
+	call	printf_
 	next
 
-defcode PRINTF2, "printf2"
+defcode PRINTF_2, "printf2"
 	pop3	x0, x1, x2
-	call	tfp_printf
+	call	printf_
 	next
 
-defcode PRINTF3, "printf3"
+defcode PRINTF_3, "printf3"
 	pop4	x0, x1, x2, x3
-	call	tfp_printf
+	call	printf_
 	next
 
 defcode	EMIT, "emit"
@@ -1854,6 +2015,8 @@ defcode CR, "cr"
 
 cr_impl:
 	mov	x0, #10
+	call	uart_putb
+	mov	x0, #13
 	call	uart_putb
 	ret
 
@@ -1918,7 +2081,7 @@ defcode ABORT, "abort"
 	next
 
 hello_msg:	.string	"Welcome to Fith!\n"
-test_msg:	.string "This is a printf test: %s %ld %c\nShould read: Test 123456 c\n"
+test_msg:	.string "This is a printf_ test: %s %ld %c\nShould read: Test 123456 c\n"
 test_str:	.string	"Test"
 enter_msg:	.string "Interpreter entered"
 word_msg:	.string "Parsed word: ("
@@ -1934,7 +2097,6 @@ reset_vector:	.quad	0
 
 .align 4
 .data
-data_segment:
 
 // **** End of read-only dictionary section ****
 
@@ -1969,20 +2131,21 @@ defvar BASE, "base", 10
 
 defvar CURRENT, "current", name_THEWL
 
-// Data sections, should be temp until we get proper allocation in place etc.
+defvar THEWL, "thewl"
+
 .data
+data_segment:
+.align 15
+
+// Data sections, should be temp until we get proper allocation in place etc.
 .align 5
-
-
-return_stack:
-	.space	DEFAULT_RSTACK_SIZE
-	.equ return_stack_top, .
-
 data_stack:
 	.space	DEFAULT_DSTACK_SIZE
 	.equ data_stack_top, .
 
-defvar THEWL, "thewl"
+return_stack:
+	.space	DEFAULT_RSTACK_SIZE
+	.equ return_stack_top, .
 
 // *** Cold start and fundamentals
 .text
@@ -2014,6 +2177,21 @@ reset:
 
 	ldr	fip, =avRESET
 	next				// Next will start the interpreter with cold_start as the first word
+
+// This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
+// "assemble" it into other words without having to keep it in sync in more than one place.
+.macro	next_impl, wrapper:vararg=
+	\wrapper ldr	x0, [fip], #8
+	\wrapper ldr	x1, [x0]
+	\wrapper br	x1
+.endm
+
+	// Default variables just push the address of their data field onto the stack
+_DOVAR:
+	add	x1, x0, #8
+	push	x1
+_VARNEXT:
+	next_impl
 
 // DOCOL is called at the start of every Fith word.
 // ) CFA of a Fith word in x0

@@ -7,12 +7,13 @@
 #include "printf.h"
 #include "timer.h"
 #include "utils.h"
+#include "linenoise.h"
 
 extern "C"
 {
 void fith_boot();
 
-void printfPutC(void *, char c)
+void _putchar(char c)
 {
 	uart_putc(c);
 }
@@ -55,27 +56,10 @@ void getKernel()
 
 u64	kernel_readline(char *destBuffer, u64 maxLen)
 {
-	i32	lineLen = 0;
-
-	do
-	{
-		int c = uart_getc();
-		uart_putc(c);
-
-		switch(c)
-		{
-			case '\r':
-			case '\n':
-				return (u64) lineLen;
-
-			case 8:
-				lineLen--;
-				break;
-		}
-
-		destBuffer[lineLen++] = c;
-
-	} while(1);
+	const char* lineOut = linenoise("> ");
+	u64 len = strlen(lineOut);
+	memcpy(destBuffer, lineOut, len);
+	return len;
 }
 
 ///// TOP LEVEL ENTRY POINT /////
@@ -85,7 +69,6 @@ int kernel_entry()
 
 	// set up serial console
 	uart_init();
-	init_printf(NULL, printfPutC);
 
 	u32 excLevel = get_el();
 	printf("\n\nHello from Apathos. Running at exception level: %d (%s)\n\n", excLevel, excLevelNames[excLevel]);

@@ -162,8 +162,10 @@ void uart_putHexLong(u64 word)
     uart_putHexWord((word >> 0) & 0xFFFFFFFF);
 }
 
-void uart_write(const u8 *buf, u64 len)
+void uart_write(const void *inBuf, u64 len)
 {
+    const u8 *buf = (const u8 *)inBuf;
+
     while (len != 0)
     {
         uart_putb(*buf++);
@@ -180,11 +182,15 @@ void uart_writeText(const char *buf, u64 len)
     }
 }
 
-void uart_read(u8 *buf, u64 len)
+u64 uart_read(void *inBuf, u64 len)
 {
+    u8 *buf = (u8 *)inBuf;
+
     for (u64 i = 0; i < len; i++)
     {
         buf[i] = uart_getb();
     }
+
+    return len;
 }
 }

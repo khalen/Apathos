@@ -25,7 +25,7 @@ void uart_putc(i8 c);
 void uart_puts(const char *s);
 
 // Raw buffer write with no translation
-void uart_write(const u8 *buffer, u64 len);
+void uart_write(const void *buffer, u64 len);
 
 // Write a buffer translating '\n' to '\r'
 void uart_writeText(const char* str, u64 len);
@@ -43,6 +43,6 @@ u8 uart_getb();
 char uart_getc();
 //
 // Raw buffer write with no translation
-void uart_read(u8 *buffer, u64 len);
+u64 uart_read(void *buffer, u64 len);
 
 }

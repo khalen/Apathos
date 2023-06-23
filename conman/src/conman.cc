@@ -87,6 +87,47 @@ class Timer
 	}
 };
 
+/* Raw mode: 1960 magic shit. */
+static int enableRawMode(int fd)
+{
+	struct termios raw;
+
+	if (!isatty(STDIN_FILENO)) goto fatal;
+
+	if (tcgetattr(fd, &g.oldTio) == -1)
+		goto fatal;
+
+	raw = g.oldTio;
+
+	// Input modes: no break, no CR to NL, no parity check, no strip char,
+	// no start/stop output control.
+	raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+
+	// Output modes - disable post processing
+	raw.c_oflag &= ~(OPOST);
+
+	// Control modes - set 8 bit chars
+	raw.c_cflag |= (CS8);
+
+	// local modes - choing off, canonical off, no extended functions,
+	// no signal chars (^Z,^C)
+	raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+
+	// Control chars - set return condition: min number of bytes and timer.
+	// We want read to return every single byte, without timeout.
+	raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0; // 1 byte, no timer
+
+	// put terminal in raw mode after flushing
+	if (tcsetattr(fd,TCSAFLUSH,&raw) < 0)
+		goto fatal;
+
+	return 0;
+
+fatal:
+	errno = ENOTTY;
+	return -1;
+}
+
 void quitRunning(int)
 {
 	g.quitNow = true;
@@ -224,7 +265,7 @@ void sendFile(const char *fileName)
 
 int main(int argc, char *argv[])
 {
-	printf("Con Man version 15.62\r\n");
+	printf("Con Man version 19.21\r\n");
 
 	for (int i = 1; i < argc; i++)
 	{
@@ -268,17 +309,10 @@ int main(int argc, char *argv[])
 
 	atexit(cleanUpOnExit);
 
-	struct termios newTio;
 	if (isatty(STDIN_FILENO))
 	{
 		g.needStdinTioRestore = true;
-		tcgetattr(STDIN_FILENO, &g.oldTio);
-
-		newTio			= g.oldTio;
-		newTio.c_lflag &= ~ICANON;
-		newTio.c_lflag &= ~ECHO;
-
-		tcsetattr(STDIN_FILENO, TCSANOW, &newTio);
+		enableRawMode(STDIN_FILENO);
 	}
 
 	signal(SIGINT, quitRunning);
