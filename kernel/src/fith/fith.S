@@ -1026,7 +1026,13 @@ defcode	DEPTH, "depth"
 defword DOTS, ".s"
 	fw	DSPFETCH
 	fw	LIT, 'S', EMIT, LIT, ':', EMIT, CR
-	fw	DEPTH, PMEM
+	fw	DEPTH
+	fw	DUP, ZGEQ
+	fw	ZBRANCH
+	fw	1f - .
+	fw	PMEM
+	fw	EXIT
+1:	fw	LIT, '<', DUP, EMIT, EMIT, CR
 	fw	EXIT
 
 defword DUMPVAL, "dumpval"
@@ -1067,15 +1073,16 @@ defword DD, "dd"
 
 // ( addr u -- ) Create dict entry for word on stack
 defword STARCREATE, "*create"
-	fw	LIT, 'A', DD, DOTS
 	fw	HERE, TOR
 	//	Link word
-	fw	GETCURRENT, FETCH	// ( addr u prevword r: newc )
+	fw	GETCURRENT, FETCH
 	fw	COMMA			// Link field
 
 	//	nameptr - 1st name word
 	// Name len byte
 	fw	DUP			// ( addr u u )
+	fw	DEFFLAG, FETCH
+	fw	OR
 	fw	CCOMMA			// ( addr u )
 
 	//	Remember whether or not the name is "short", that is, whether we will need
@@ -1090,22 +1097,17 @@ defword STARCREATE, "*create"
 	fw	SWAP			// ( addr here u|15 )
 	fw	CMOVE
 
-	fw	LIT, 'B', DD, DOTS
-
 	// Align, then skip an extra word if the name was short
 	fw	LIT, 1, CELLS
 	fw	ALLOT
 	fw	ALIGN
 	fw	RFROM
-	fw	LIT, 'C', DD, DOTS
 
 	fw	ZBRANCH
 	fw	1f - .
 
 	fw	LIT, 1,	CELLS
 	fw	ALLOT
-
-	fw	LIT, 'D', DD, DOTS
 
 	// Code field
 1:	fw	LIT, _DOVAR
@@ -1114,7 +1116,6 @@ defword STARCREATE, "*create"
 	// Update last
 	fw	RFROM
 	fw	GETCURRENT, STORE
-	fw	LIT, 'e', DD, DOTS
 	fw	EXIT
 
 defword	CREATE, "create"
@@ -1378,7 +1379,7 @@ matchxt_matched:
 2:	mov	scx0, #-1
 	mov	scx1, #1
 	tst	x12, #F_IMMEDIATE
-	csel	x3, scx0, scx1, ne
+	csel	x3, scx1, scx0, ne
 
 3:	add	x0, x0, #24		// Move to the cfa of this word
 
@@ -1440,8 +1441,7 @@ word_search_buffer:	.space	256
 word_lower_buffer:	.space	256
 
 defword	REPL, "repl"
-1:	fw	DOTS
-	fw	REFILL
+1:	fw	REFILL
 	fw	ZBRANCH
 	fw	1b - .
 	fw	INTERPRETLINE
@@ -1493,7 +1493,6 @@ defword QEXECUTE, "?execute"
 
 	fw	ZBRANCH
 	fw	.qeexec - .
-	fw	LIT, 'C', DD
 	fw	COMMA
 	fw	EXIT		// Compile and bail
 
@@ -1509,7 +1508,6 @@ defword QEXECUTE, "?execute"
 	fw	STATE, FETCH	// Compiling? Immediate = push num right now; compiling = compile LIT xxx
 	fw	ZBRANCH
 	fw	.eexit - .
-	fw	LIT, 'C', DD
 	fw	LITERAL
 
 .eexit: fw	EXIT
@@ -1969,18 +1967,22 @@ defcode	EXECUTE, "execute"
 	br	x1
 
 defword WARMSTART, "*warmstart"
-	fw	DOTS
 	fw	REPL
 	fw	EXIT
 
 defword COLDSTART, "*coldstart"
 cold_start:
-	fw	DOTS
 	fw	LIT, hello_msg
 	fw	PRINTF_
-	fw	DOTS
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
+	#if 0
+	fw	LIT, rc_msg
+	fw	PRINTF_
+	fw	RUNRC
+	fw	LIT, rc_done_msg
+	fw	PRINTF_
+	#endif
 	fw	REPL
 	fw	EXIT
 
@@ -2076,6 +2078,20 @@ defcode	REFILL, "refill"
 .ref_done:
 	next
 
+defword RC, "*rc"
+	fw	LIT, _binary_src_fith_rc_5_start
+	fw	LIT, _binary_src_fith_rc_5_size
+	fw	EXIT
+
+defword RUNRC, "runrc"
+	fw	LIT, F_BUILTIN
+	fw	DEFFLAG, STORE
+	fw	RC
+	fw	EVALUATE
+	fw	LIT, 0
+	fw	DEFFLAG, STORE
+	fw	EXIT
+
 defcode ABORT, "abort"
 	b 	abort
 	next
@@ -2084,6 +2100,8 @@ hello_msg:	.string	"Welcome to Fith!\n"
 test_msg:	.string "This is a printf_ test: %s %ld %c\nShould read: Test 123456 c\n"
 test_str:	.string	"Test"
 enter_msg:	.string "Interpreter entered"
+rc_msg:		.string	"Evaluating rc.5..."
+rc_done_msg:	.string	"Done\n"
 word_msg:	.string "Parsed word: ("
 pword_msg:	.string ")\n"
 noword_msg:	.ascii "? "
@@ -2129,9 +2147,11 @@ defvar SP, "sp"
 // BASE - the current numerical base for converting literals
 defvar BASE, "base", 10
 
+defvar	DEFFLAG, "default-flag", 0
+
 defvar CURRENT, "current", name_THEWL
 
-defvar THEWL, "thewl"
+defvar THEWL, "thewl", 0
 
 .data
 data_segment:
@@ -2172,7 +2192,7 @@ reset:
 	mov	x0, #10
 	savevar	BASE, x0
 
-	ldr	x0, =data_segment	// Initial rtn stack and DS
+	ldr	x0, =0x400000	// Initial rtn stack and DS
 	savevar	CP, x0
 
 	ldr	fip, =avRESET

@@ -59,7 +59,8 @@ u64	kernel_readline(char *destBuffer, u64 maxLen)
 	const char* lineOut = linenoise("> ");
 	u64 len = strlen(lineOut);
 	memcpy(destBuffer, lineOut, len);
-	return len;
+	destBuffer[len] = 10;
+	return len + 1;
 }
 
 ///// TOP LEVEL ENTRY POINT /////

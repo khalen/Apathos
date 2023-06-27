@@ -1,0 +1,20 @@
+: \ 10 PARSE 2DROP ; IMMEDIATE
+65 emit
+
+\ Now we have backslash comments!
+66 emit
+
+: '
+  \ Can't use IF yet
+  parse-word find-word dup 0= ?dup 2drop ;
+
+67 emit
+
+: COMPILE,	, ;
+: [COMPILE] ' COMPILE, ; IMMEDIATE
+
+: CHAR		parse-word drop c@ ;
+: [CHAR]	char [compile] literal ; IMMEDIATE
+: ( [char] ) parse 2drop ; IMMEDIATE
+
+( We should now have non nested paren comments )

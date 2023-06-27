@@ -23,12 +23,19 @@ $(BUILD_DIR)/%_s.o : $(SRC_DIR)/%.S
 	@mkdir -p $(@D)
 	$(ARM_AS) $(AFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/%_5.o : $(SRC_DIR)/%.5
+	@mkdir -p $(@D)
+	$(ARM_OBJCOPY) -I binary -O aarch64-unknown-elf $< $@
+
 C_FILES     = $(wildcard $(SRC_DIR)/*.c)
 C_FILES    += $(wildcard $(SRC_DIR)/*/*.c)
+F_FILES     = $(wildcard $(SRC_DIR)/*.5)
+F_FILES    += $(wildcard $(SRC_DIR)/*/*.5)
 ASM_FILES   = $(wildcard $(SRC_DIR)/*.S)
 ASM_FILES  += $(wildcard $(SRC_DIR)/*/*.S)
 OBJ_FILES   = $(ASM_FILES:$(SRC_DIR)/%.S=$(BUILD_DIR)/%_s.o)
 OBJ_FILES  += $(C_FILES:$(SRC_DIR)/%.c=$(BUILD_DIR)/%_c.o)
+OBJ_FILES  += $(F_FILES:$(SRC_DIR)/%.5=$(BUILD_DIR)/%_5.o)
 
 DEPLOY_FILES  = $(wildcard $(FIRMWARE_DIR)/*.*)
 OVERLAY_FILES = $(wildcard $(FIRMWARE_DIR)/overlays/*.*)

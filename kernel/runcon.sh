@@ -1,2 +1,2 @@
-../bin/conman -k kernel8.img /dev/tty.usbserial-1440
+../bin/conman -k kernel8.img /dev/tty.usbserial-14101
 
