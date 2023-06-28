@@ -431,40 +431,61 @@ defcode	DIV8, "8/"	// (a -- a / 2)
 	push	x0
 	next
 
-defcode	LSHIFT, "lshift"	// (a b -- a << b)
-	pop2	x1, x0
-	lsl	x0, x1, x0
-	push	x0
-	next
-
 defcode	MUL, "*"	// (a b -- a * b)
 	pop2	x1, x0
 	mul	x2, x1, x0
 	push	x2
 	next
 
-// This is unsigned division - not sure if the default / should be signed or unsigned
+// This is signed division - not sure if the default / should be signed or unsigned
 defcode DIV, "/"
 	pop2	x1, x0
-	udiv	x2, x1, x0
+	sdiv	x2, x1, x0
 	push	x2
 	next
 
 // Arm doesn't have that nice /mod insn like Intel, so we do it the old fashioned way: n mod m = n - (n / m * m)
 defcode	MOD, "mod"
 	pop2	x1, x0		// (a b --) x1 = a x0 = b
-	udiv	x2, x1, x0	// x2 = a / b
-	mul	x0, x2, x0	// x0 = (a / b) * b
-	sub	x0, x1, x0	// x0 = (a - (a / b * b))
+	sdiv	x2, x1, x0	// x2 = a / b
+	smsubl	x0, w2, w0, x1	// x0 = a - ((a/b) * b)
 	push	x0
 	next
 
 defword	DIVMOD, "/mod"	// (a b -- a/b a%b)
-	fw	TWODUP	// (a b -- a b a b)
-	fw	DIV	// (a b a b -- a b a/b)
-	fw	ROT	// (a b a/b -- a/b a b)
-	fw	MOD	// (a/b a b -- a/b a%b)
-	fw	EXIT
+	pop2	x1, x0
+	sdiv	x2, x1, x0
+	smsubl	x0, w2, w0, x1
+	push2	x2, x0
+	next
+
+// This is signed division - not sure if the default / should be signed or unsigned
+defcode UDIV, "u/"
+	pop2	x1, x0
+	udiv	x2, x1, x0
+	push	x2
+	next
+
+// Arm doesn't have that nice /mod insn like Intel, so we do it the old fashioned way: n mod m = n - (n / m * m)
+defcode	UMOD, "umod"
+	pop2	x1, x0		// (a b --) x1 = a x0 = b
+	udiv	x2, x1, x0	// x2 = a / b
+	umsubl	x0, w2, w0, x1	// x0 = a - ((a/b) * b)
+	push	x0
+	next
+
+defword	UDIVMOD, "u/mod"	// (a b -- a/b a%b)
+	pop2	x1, x0
+	udiv	x2, x1, x0
+	umsubl	x0, w2, w0, x1
+	push2	x2, x0
+	next
+
+defcode	LSHIFT, "lshift"	// (a b -- a << b)
+	pop2	x1, x0
+	lsl	x0, x1, x0
+	push	x0
+	next
 
 // LOGICAL shift right, not arithmetic, does not propagate sign bit
 defcode	RSHIFT, "rshift"	// (a b -- a >> b)
@@ -561,18 +582,16 @@ defzcnd	ZGEQ, "0>=", ge
 defcode MIN, "min"
 	pop2	x0, x1
 	cmp	x0, x1
-	blt	1f
-	mov	x0, x1
-1:	push	x0
+	csel	x2, x0, x1, lt
+	push	x2
 	next
 
 // Same as min, unsigned
 defcode UMIN, "umin"
 	pop2	x0, x1
 	cmp	x0, x1
-	blo	1f
-	mov	x0, x1
-1:	push	x0
+	csel	x2, x0, x1, lo
+	push	x2
 	next
 
 // (t p q -- flag)	Test if t is within p and q, that is, p <= t < q.
@@ -649,9 +668,9 @@ defcode	LIT, "lit"	// ( -- *fip )
 	push	x0
 	next
 
-// This is essentially memcpy. It relies on the reasonable sounding assumption
-// that on arm64 w/no unaligned address exceptions, a larger unaligned load or
-// store is still faster than n byte fetches or stores. Based on from
+// This is essentially memcpy. It relies on the reasonable(?) sounding assumption
+// that on arm64 w/no unaligned address exceptions enabled, a larger unaligned load or
+// store is still faster than n byte fetches or stores. Based on a dumb translation of
 // guthub.com/ClickHouse/ClickHouse/memcpy.h; DOES NOT HANDLE OVERLAPPING SRC
 // AND DST CORRECTLY
 defcode	MOVE, "move"	// (srcaddr dstaddr u --)	Move u address units from srcaddr to dstaddr.
@@ -824,6 +843,44 @@ defcode	CMOVE, "cmove"	// (fromaddr toaddr u --)	for i in 0 .. u	toaddr[i] = fro
 
 2:	next
 
+// ( c-addr u char -- ) Fill u bytes of memory starting at c-addr with char. Optimized to do word fills until < 8 bytes remain
+// but does not check starting alignment.
+defcode FILL, "fill"
+	pop3	x0, x1, x2
+
+	cmp	x1, xzr
+	ble	3f
+
+	cmp	x1, #8
+	mov	x3, x1
+	blt	2f
+
+	// Replicate low byte of x2 into all 8 bytes of x4
+	and	w4, w2, #0xFF		// 00000000000000xx
+	orr	x5, x4, x4, LSL #8
+	orr	x6, x5, x5, LSL #16
+	orr	x4, x6, x6, LSL #32
+
+	and	x3, x1, #7	// Mask off lower 3 bits, must write these as bytes
+	lsr	x1, x1, #3
+
+1:	cmp	x1, xzr
+	ble	2f
+
+	str	x4, [x0], #8
+	sub	x1, x1, #1
+	b	1b
+
+2:	cmp	x3, xzr
+	ble	3f
+
+	strb	w2, [x0], #1
+	sub	x3, x3, #1
+	b	2b
+
+3:	next
+
+
 defcode	DSPFETCH, "dsp@"
 	mov	x0, dsp
 	push	x0
@@ -943,7 +1000,7 @@ defword CCOMMA, "c,"
 
 defword LITERAL, "literal", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, LIT	// Well that's fun
-	fw	COMMA, COMMA
+	fw	COMMA, COMMA	// COMMA COMMA COMMA CHAMELEON
 	fw	EXIT
 
 defword BRA, "[", F_IMMEDIATE | F_BUILTIN
@@ -978,7 +1035,7 @@ defcode PWORDASCII, ".wordascii"
 	cmp	x2, #' '
 	csel	x0, x3, x2, lt
 	cmp	x2, #127
-	csel	x0, x3, x0, eq
+	csel	x0, x3, x0, ge
 	call	uart_putb
 	lsr	x16, x16, #8
 	sub	x17, x17, 1
@@ -1073,7 +1130,9 @@ defword DD, "dd"
 
 // ( addr u -- ) Create dict entry for word on stack
 defword STARCREATE, "*create"
-	fw	HERE, TOR
+	fw	HERE, DUP, TOR
+	fw	LIT, 32, LIT, 0, FILL
+
 	//	Link word
 	fw	GETCURRENT, FETCH
 	fw	COMMA			// Link field
@@ -1085,11 +1144,6 @@ defword STARCREATE, "*create"
 	fw	OR
 	fw	CCOMMA			// ( addr u )
 
-	//	Remember whether or not the name is "short", that is, whether we will need
-	//	to add an additional word of padding to retain the header layout
-	fw	DUP
-	fw	LIT, 7, GT, TOR		// ( addr u r: newc (u > 7) )
-
 	// Name words
 	fw	LIT, 15			// Max len of name
 	fw	MIN			// ( addr u|15 )
@@ -1098,10 +1152,10 @@ defword STARCREATE, "*create"
 	fw	CMOVE
 
 	// Align, then skip an extra word if the name was short
-	fw	LIT, 1, CELLS
-	fw	ALLOT
 	fw	ALIGN
-	fw	RFROM
+
+	fw	HERE, RFETCH, SUB
+	fw	LIT, 24, LT
 
 	fw	ZBRANCH
 	fw	1f - .
@@ -1137,14 +1191,50 @@ defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	BRA
 	fw	EXIT
 
-defword LAST, "last"
-	fw	GETCURRENT
+// Given the name field of a word, move to its lfa
+defcode TONAME, ">name"
+	pop	x0
+	sub	x1, x0, #8
+	push	x1
+	next
+
+// Given the name field of a word, move to its lfa
+defcode NAMEFROM, "name>"
+	pop	x0
+	add	x1, x0, #8
+	push	x1
+	next
+
+defword LATEST, "latest"
+	fw	GETCURRENT, FETCH
+	fw	EXIT
+
+defword LASTNAME, "last-name"
+	fw	GETCURRENT, FETCH
 	fw	LIT, 8
 	fw	ADD
 	fw	EXIT
 
-defword	IMMEDIATE, "immediate"
-	fw	LAST
+// Toggle hidden bit on the given dict entry (lfa)
+// ( lfa -- )
+defcode	HIDENAME, "hide-name"
+	pop	x0
+	add	x0, x0, #8	// Move to name field
+	ldrb	w1, [x0]
+	orr	w1, w1, #F_HIDDEN
+	strb	w1, [x0]
+	next
+
+defcode	UNHIDENAME, "unhide-name"
+	pop	x0
+	add	x0, x0, #8	// Move to name field
+	ldrb	w1, [x0]
+	and	w1, w1, #~F_HIDDEN
+	strb	w1, [x0]
+	next
+
+defword	IMMEDIATE, "immediate", F_IMMEDIATE | F_BUILTIN
+	fw	LASTNAME
 	fw	DUP, CFETCH
 	fw	LIT, F_IMMEDIATE
 	fw	OR
@@ -1259,44 +1349,6 @@ ntell_impl:
 
 2:	ret
 
-defword TESTER4, "tester4"
-	fw	LIT, tester4_msg
-	fw	LIT, tester4_msg_len
-	fw	TELL
-	fw	EXIT
-tester4_msg:	.ascii "**TEST 4\n"
-tester4_msg_len = . - tester4_msg
-
-defword TESTER3, "tester3"
-	fw	LIT, tester3_msg
-	fw	LIT, tester3_msg_len
-	fw	TELL
-	fw	EXIT
-tester3_msg:	.ascii "**TEST 3\n"
-tester3_msg_len = . - tester3_msg
-
-defword TESTER2, "tester2"
-	fw	LIT, tester2_msg
-	fw	LIT, tester2_msg_len
-	fw	TELL
-	fw	EXIT
-tester2_msg:	.ascii "**TEST 2\n"
-tester2_msg_len = . - tester2_msg
-
-defword TESTER, "tester"
-	fw	LIT, tester_msg
-	fw	LIT, tester_msg_len
-	fw	TELL
-	fw	EXIT
-tester_msg:	.ascii "**TEST 1\n"
-tester_msg_len = . - tester_msg
-
-defword RECURSE, "recurse", F_IMMEDIATE | F_BUILTIN
-	fw	GETCURRENT, FETCH
-	fw	TOCFA
-	fw	COMMA
-	fw	EXIT
-
 // Note: caddrs here are SCS
 // ( caddr caddr lfa --		lowered normal len lfa --
 // 	caddr caddr lfa 0  		- No match
@@ -1325,7 +1377,7 @@ matchxt_impl:
 	csel	x10, x2, x1, ne
 	and	x9, x9, #0x1f
 
-#if 1
+#if 0
 	// Print test : dict
 	mov	scx3, x0
 	mov	scx4, x1
@@ -1358,8 +1410,9 @@ matchxt_impl:
 	ldr	x4, [x0, #8]
 
 	// Mask flags from the first comparison word (because we're little endian, this is actually in the low byte
-	// of the reg even though it's first in memory)
-	movn	x8, #(F_IMMEDIATE | F_BUILTIN | F_HIDDEN)
+	// of the reg even though it's first in memory). Note that we don't mask F_HIDDEN. This has the net effect that
+	// hidden names will never match the count of the search word, and will therefore never be found
+	movn	x8, #(F_IMMEDIATE | F_BUILTIN)
 	and	x7, x4, x8
 	cmp	x7, x3
 	bne	4f		// No match
@@ -1631,34 +1684,6 @@ defcode	INPLUS, "in+"
 //    source drop	( u >in inaddr )
 //    + swap		( saddr u )
 // ;
-defword	PARSET, "parse-t"
-	fw	TOIN, FETCH
-	fw	DUP, TOR, NROT	// >in base limit  r: >in
-	fw	TWOTOR		// >in r: 0 base limit
-pt_loop:
-	fw	DUP, INFETCH	// >in chr flag
-	fw	SWAP		// >in flag chr
-	fw	TWORFETCH	// >in flag chr lo hi
-	fw	WITHIN
-	fw	AND		// >in flag
-	fw	ZBRANCH
-	fw	pt_got - .	// >in, branch if flag 0
-	fw	INC
-	fw	BRANCH
-	fw	pt_loop - .	// repeat chr loop
-pt_got:
-	// >in' r: >in lo hi
-	fw	DUP, TOIN, STORE
-	fw	RFROM, DROP, RFROM, DROP	// >in r: o
-	// Convert into addr u form
-	fw	RFETCH
-	fw	SUB		// u r: o
-	fw	RFROM		// u o
-	fw	SOURCE, DROP	// u o saddr
-	fw	INC		// u caddr
-	fw	SWAP
-	fw	EXIT
-
 defcode	PARTOK, "parse-token"
 	pop2	x11, x12
 
@@ -1762,6 +1787,8 @@ defword	GETCURRENT, "get-current"
 
 // ( caddr u -- n true ) if convertible
 // ( caddr u -- caddr u false ) if not convertible
+// Convert the given FCS into a number if possible. Handles F20xx
+// 	$[-]<hexnum>, #[-]<decnum>, %[-]<binnum>, 'C', and [-]<basenum>
 defcode	QNUMBER, "?number"
 	pop2	x0, x1
 
@@ -1854,6 +1881,7 @@ defcode	QNUMBER, "?number"
 	beq	.notAlphaDigit
 
 	sub	x4, x4, #'A'
+	add	x4, x4, #10
 	b	.gotDigit
 
 .notAlphaDigit:
@@ -1865,6 +1893,7 @@ defcode	QNUMBER, "?number"
 	beq	.notConvertible
 
 	sub	x4, x4, #'a'
+	add	x4, x4, #10
 
 .gotDigit:
 	// Check for digit >= base
@@ -1900,7 +1929,7 @@ defcode	QNUMBER, "?number"
 	push	x5
 	next
 
-// ( -- r: ib #ib >in )		// Save the input state onto the return stack
+// ( -- r: ib #ib >in sid)		// Save the input state onto the return stack
 defcode	SAVEINPUT, "save-input"
 	loadvar	x0, IB
 	loadvar x1, NUMIB
@@ -1913,7 +1942,7 @@ defcode	SAVEINPUT, "save-input"
 	pushrsp	x3
 	next
 
-// ( r: ib #ib >in -- r: )	// Restore the input state from the return stack
+// ( r: ib #ib >in sid -- r: )	// Restore the input state from the return stack
 defcode	RESTOREINPUT, "restore-input"
 	poprsp	x3
 	poprsp	x2
@@ -1931,11 +1960,11 @@ defcode	RESTOREINPUT, "restore-input"
 defcode	SETINPUT, "set-input"
 	pop4	x0, x1, x2, x3
 
-	pushrsp	x0
-	pushrsp	x1
-	pushrsp	x2
-	pushrsp	x3
-	b	code_RESTOREINPUT
+	savevar	SOURCEID, x3
+	savevar	TOIN, x2
+	savevar	NUMIB, x1
+	savevar	IB, x0
+	next
 
 // ( caddr u -- ) Save the current input state, then set the input state to the FCS on the stack.
 // 	Interpret all the input, then restore the previous input state.
@@ -2149,9 +2178,9 @@ defvar BASE, "base", 10
 
 defvar	DEFFLAG, "default-flag", 0
 
-defvar CURRENT, "current", name_THEWL
+defvar CURRENT, "current", var_THEWL
 
-defvar THEWL, "thewl", 0
+defvar THEWL, "thewl", name_THEWL
 
 .data
 data_segment:
@@ -2187,7 +2216,13 @@ abort:
 
 reset:
 	savevar	STATE, xzr
+
 	savevar	TOIN, xzr
+	savevar	SOURCEID, xzr
+	savevar	NUMIB, xzr
+
+	ldr	x0, =default_input_buffer
+	savevar	IB, x0
 
 	mov	x0, #10
 	savevar	BASE, x0

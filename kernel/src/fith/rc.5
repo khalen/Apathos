@@ -1,20 +1,40 @@
-: \ 10 PARSE 2DROP ; IMMEDIATE
-65 emit
+: \ 10 parse 2drop ; IMMEDIATE
 
 \ Now we have backslash comments!
-66 emit
+
+\ Words in this file are defined in lower case; that's because when running the RC,
+\   all words automatically get the F_BUILTIN flag. This compares the downcased version
+\   of a search word with the name in the dictionary, allowing upper or lower case to
+\   match builtins. This only works if the words themselves are lower case.
 
 : '
   \ Can't use IF yet
   parse-word find-word dup 0= ?dup 2drop ;
 
-67 emit
+: compile,	, ;
+: [compile] ' compile, ; IMMEDIATE
 
-: COMPILE,	, ;
-: [COMPILE] ' COMPILE, ; IMMEDIATE
+\ Char handling
+: char		parse-word drop c@ ;
+: [char]	char [compile] literal ; IMMEDIATE
 
-: CHAR		parse-word drop c@ ;
-: [CHAR]	char [compile] literal ; IMMEDIATE
-: ( [char] ) parse 2drop ; IMMEDIATE
+\ Define some useful constants
 
-( We should now have non nested paren comments )
+\ Newline is ASCII 10
+: '\n' 10 ;
+
+\ ' ' is ascii 32
+: bl	32 ;
+
+\ SPACE prints a space
+: space bl emit ;
+
+\ NOT (boolean)
+: not 0= ;
+
+\ RECURSE makes a recursive call to the word that's currently being compiled.
+\   Get the latest word created, move to its cfa, and compile that
+: recurse
+  latest >cfa , ;
+
+\ *** Control structures ***

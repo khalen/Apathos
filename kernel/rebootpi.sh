@@ -1,2 +1,2 @@
 #! /bin/sh
-echo '' > /dev/tty.usbserial-0001
+echo '' > /dev/tty.usbserial-14101
