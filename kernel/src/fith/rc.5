@@ -1,6 +1,11 @@
-: \ 10 parse 2drop ; IMMEDIATE
+: .( ')' parse type ; IMMEDIATE
+.( Booting from internal rc.5...) cr
 
+: \ 10 parse 2drop ; IMMEDIATE
 \ Now we have backslash comments!
+\
+: ( ')' parse 2drop ; IMMEDIATE
+( Now we have non nested paren comments )
 
 \ Words in this file are defined in lower case; that's because when running the RC,
 \   all words automatically get the F_BUILTIN flag. This compares the downcased version
@@ -11,12 +16,26 @@
   \ Can't use IF yet
   parse-word find-word dup 0= ?dup 2drop ;
 
+\ We really only need this until we have postpone, but it makes defining early control
+\ flow words easier. This only works because we're a traditional explicit return stack
+\ forthlike.
+: *compile r> dup @ , cell+ >r ;
+
 : compile,	, ;
 : [compile] ' compile, ; IMMEDIATE
+
+: [']
+  ' [compile] literal ; IMMEDIATE
 
 \ Char handling
 : char		parse-word drop c@ ;
 : [char]	char [compile] literal ; IMMEDIATE
+.( Now we can print messages!)
+
+\ RECURSE makes a recursive call to the word that's currently being compiled.
+\   Get the latest word created, move to its cfa, and compile that
+: recurse
+  latest >cfa compile, ; IMMEDIATE
 
 \ Define some useful constants
 
@@ -32,9 +51,156 @@
 \ NOT (boolean)
 : not 0= ;
 
-\ RECURSE makes a recursive call to the word that's currently being compiled.
-\   Get the latest word created, move to its cfa, and compile that
-: recurse
-  latest >cfa , ;
+\ Misc math
+: signum	\ x -- -1/0/1
+	dup 0< swap 0> - ;
+
+: depth
+  stack drop - 1 cells / ;
+
+: variable	create 1 cells allot ;
+: wordlist \ -- wid
+  here 1 cells allot ;
+
+: count	\ caddr -- addr' ch
+  dup 1+ swap c@ ;
+
+: /string		\ ( addr u n -- addr' u' )
+  tuck -
+  >r + r>
+;
 
 \ *** Control structures ***
+\ condition IF truepart THEN rest
+\ 		--> condition 0branch [offset] truepart rest
+\ 		where offset is the offset of rest
+\ condition IF truepart ELSE elsepart THEN rest
+\ 		--> condition 0branch [offset0] truepart branch [offset1] elsepart rest
+\ 		where offset0 is the offset of falsepart and offset1 is the offset of rest
+: if
+	*compile 0branch	\ Compile 0branch
+	here				\ Remember where we are (on dstack)
+	0 ,					\ Compile dummy offset
+; IMMEDIATE
+
+: unless
+  *compile not
+  [compile] if
+; IMMEDIATE
+
+: then
+	here over -	\ Offset is current HERE - remembered HERE
+	swap !		\ Store the actual offset back at the dummy location
+; IMMEDIATE
+
+\ Note that the THEN word is identical between if and else - so else needs to
+\ leave things in the state that IF does, ie. the addr of an offset to backpatch
+\ on the dstack
+: else
+	*compile branch
+	here		\ Remember where we are
+	0 ,			\ Dummy elsepart offset
+	swap		\ Backfill the original IF offset
+	here over -
+	swap !
+; IMMEDIATE
+
+: s"
+  34 parse
+  [compile] sliteral
+; IMMEDIATE
+
+\ 0= if <perror> then ...
+: abort"
+  *compile 0branch
+  here
+  0 ,
+  [compile] s"
+  *compile type
+  *compile abort
+  here
+  over -
+  swap !
+; IMMEDIATE
+
+\ POSTPONE compiles a call to the following word, whether it is an immediate word or not.
+: postpone
+  parse-word find-word		\ ( -- 0 | xt 1 | xt -1 )
+  ?dup 0= abort" Postpone not"
+
+  \ xt +- 1
+  0> if
+	\ Immediate word
+	compile,
+  else
+	\ Non immediate
+	[ ' literal compile, ]
+	['] compile, compile,
+  then
+; IMMEDIATE
+
+
+\ ** Looping constructs
+: begin
+  here			\ Remember loop start
+; IMMEDIATE
+
+: until
+  here -
+  ,
+; IMMEDIATE
+
+: while
+  postpone 0branch
+  here			\ Remember where we are, compile branch dummy
+  0 ,
+; IMMEDIATE
+
+: repeat		\ ( bloc wloc -- )
+  swap			\ ( wloc bloc )
+  postpone branch
+  here -		\ ( wloc offset )
+  ,				\ ( wloc )
+  here			\ ( wloc here )
+  over -		\ ( wloc offset )
+  swap !
+; IMMEDIATE
+
+: find			\ caddr -- caddr 0|xt 1|xt -1
+  >r r@ count	\ ( addr u )
+  find-word		\ ( 0 | xt 1 | xt -1 )
+  dup 0= if
+	r> swap		\ ( caddr 0 )
+  else
+	r> drop		\ ( xt 1|xt -1 )
+  then
+;
+
+: decimal 10 base ! ;
+: hex     16 base ! ;
+
+: u.
+  base @ /mod
+  ?dup if
+	recurse
+  then
+
+  dup 10 < if
+	'0'
+  else
+	10 -
+	'A'
+  then
+  +
+  emit
+;
+
+: word \ char "<chars>ccc<char>" -- caddr
+  dup dup 1+ skip			\ Skip leading delimiter(s)
+  dup 1+ swap parse-token	\ Grab word ( low hi -- addr u )
+  >r here 1+ r@ cmove		\ Word will be copied to here+1 .. here+(len+1), 1st byte reserved for count
+  r> here c!				\ Store count
+  here
+;
+
+.( Done.) cr

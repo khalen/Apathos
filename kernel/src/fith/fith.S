@@ -128,9 +128,9 @@ scw5	.req	w28
 //   else we want later (hashed strings, symbol table entries, etc.)
 // 0: [8b| Link word]            -> Points to link field of next word
 // 1: [1b| Name len + flags]
-// 2: [7b| Name1]		 -> 1st 8 chars of name
-// 3: [8b| Name2]		 -> 2nd 8 chars of name
-// 4: [8b| Codeword]		 -> Addr of DOCOL (below) or a jump to the immediately following insn
+//  : [7b| Name1]		 -> 1st 8 chars of name
+// 2: [8b| Name2]		 -> 2nd 8 chars of name
+// 3: [8b| Codeword]		 -> Addr of DOCOL (below) or a jump to the immediately following insn
 
 	.set	dict_link, 0	// Dict terminator
 
@@ -452,14 +452,14 @@ defcode	MOD, "mod"
 	push	x0
 	next
 
-defword	DIVMOD, "/mod"	// (a b -- a/b a%b)
+defcode	DIVMOD, "/mod"	// (a b -- a/b a%b)
 	pop2	x1, x0
 	sdiv	x2, x1, x0
 	smsubl	x0, w2, w0, x1
-	push2	x2, x0
+	push2	x0, x2
 	next
 
-// This is signed division - not sure if the default / should be signed or unsigned
+// Unsigned division
 defcode UDIV, "u/"
 	pop2	x1, x0
 	udiv	x2, x1, x0
@@ -677,7 +677,7 @@ defcode	MOVE, "move"	// (srcaddr dstaddr u --)	Move u address units from srcaddr
 #ifndef OPTIMIZED_MOVE
 	pop3	x0, x1, x2
 
-1:	cmp	x2, #0
+1:	cmp	x2, xzr
 	beq	0f
 
 	ldrb	w8, [x0], #1
@@ -787,7 +787,7 @@ aligned:
 	tst	x4, 0xF
 	beq	unrolled
 	mov	x0, =bad_move_dest_alignment
-	b	abort
+	b	fith_abort
 
 unrolled:
 	ldr	x10, [x0], #8
@@ -880,6 +880,112 @@ defcode FILL, "fill"
 
 3:	next
 
+defcode PWORDASCII, ".wordascii"
+	pop	x16
+	mov	x17, #8
+	mov	x3, #'.'
+	mov	x0, #'/'
+	call	uart_putb
+
+1:	cmp	x17, xzr
+	beq	2f
+
+	mov	x3, #'.'
+	and	x2, x16, #0xFF
+	cmp	x2, #' '
+	csel	x0, x3, x2, lt
+	cmp	x2, #127
+	csel	x0, x3, x0, ge
+	call	uart_putb
+	lsr	x16, x16, #8
+	sub	x17, x17, 1
+	b	1b
+2:	mov	x0, #'/'
+	call	uart_putb
+	next
+
+defcode PWORDBYTES, ".wordbytes"
+	pop	x11
+	mov	x10, #8
+
+1:	cmp	x10, xzr
+	beq	2f
+	ldr	x0, =bword_str
+	and	x1, x11, #0xFF
+	call	printf_
+	lsr	x11, x11, #8
+	sub	x10, x10, 1
+	b	1b
+2:	next
+
+.section .rodata
+bword_str:	.string "%02llX "
+.section .text
+
+defcode PWORD, ".word"
+	pop	x1
+	ldr	x0, =xword_str
+	call	printf_
+	next
+
+.section .rodata
+xword_str:	.string "%016llX "
+.section .text
+
+defcode	DEPTH, "depth"
+	loadvar	x0, S0
+	sub	x0, x0, dsp
+	asr	x0, x0, #3
+	sub	x0, x0, #1
+	push	x0
+	next
+
+defword DOTS, ".s"
+	fw	DSPFETCH
+	fw	DEPTH
+	fw	DUP, ZGEQ
+	fw	ZBRANCH
+	fw	1f - .
+	fw	PMEM
+	fw	EXIT
+1:	fw	LIT, '<', DUP, EMIT, EMIT, CR
+	fw	EXIT
+
+defword DUMPVAL, "dumpval"
+	fw	DUP, PWORD		// ( nc addr )
+	fw	LIT, ':', EMIT
+	fw	LIT, 32, EMIT
+	fw	DUP, FETCH		// ( nc addr @addr )
+	fw	DUP, PWORD		// ( nc addr @addr )
+	fw	DUP, PWORDBYTES		// ( nc addr @addr )
+	fw	PWORDASCII		// ( nc addr )
+	fw	CR
+	fw	EXIT
+
+// ( addr cnt -- )
+defword PMEM, ".mem"
+1:	fw	QDUP			// ( addr cnt|0 cnt? -- )
+	fw	ZBRANCH
+	fw	2f - .
+	fw	DEC			// ( addr (cnt-1) )
+	fw	SWAP			// ( nc addr )
+	fw	DUMPVAL
+	fw	INCX8			// ( nc addr+8 )
+	fw	SWAP			// ( naddr nc )
+	fw	BRANCH
+	fw	1b - .
+
+2:	fw	DROP
+	fw	CR
+	fw	EXIT
+
+pword_str:	.string "%08llx "
+
+defword DD, "dd"
+	fw	EMIT
+	fw	LIT, ':', EMIT
+	fw	CR
+	fw	EXIT
 
 defcode	DSPFETCH, "dsp@"
 	mov	x0, dsp
@@ -891,12 +997,30 @@ defcode	DSPSTORE, "dsp!"
 	mov	dsp, x0
 	next
 
+// ( -- addr-s addr-base capacity ) - note: addr-s points to the tos on ENTRY to this word
+defcode STACK, "stack"
+	mov	x0, dsp
+	loadvar	x1, S0
+	ldr	x2, =data_stack_top
+	sub	x2, x2, x1
+	push3	x0, x1, x2
+	next
+
 defcode	RSPFETCH, "rsp@"
 	push	rsp
 	next
 
 defcode RSPSTORE, "rsp!"
 	pop	rsp
+	next
+
+// ( -- addr-s addr-base capacity ) - note: addr-s points to the tos on ENTRY to this word
+defcode RSTACK, "rstack"
+	mov	x0, rsp
+	loadvar	x1, R0
+	ldr	x2, =return_stack_top
+	sub	x2, x2, x1
+	push3	x0, x1, x2
 	next
 
 defword	HERE, "here"
@@ -1015,118 +1139,11 @@ defword KET, "]"
 	fw	STORE
 	fw	EXIT
 
+// Dummy word to allow setting a breakpoint in Fith implemented words - in gdb, "b code_BREAK"
 defcode	BREAK, "brk"
 	pop	x0
 	push	x0
 	next
-
-defcode PWORDASCII, ".wordascii"
-	pop	x16
-	mov	x17, #8
-	mov	x3, #'.'
-	mov	x0, #'/'
-	call	uart_putb
-
-1:	cmp	x17, xzr
-	beq	2f
-
-	mov	x3, #'.'
-	and	x2, x16, #0xFF
-	cmp	x2, #' '
-	csel	x0, x3, x2, lt
-	cmp	x2, #127
-	csel	x0, x3, x0, ge
-	call	uart_putb
-	lsr	x16, x16, #8
-	sub	x17, x17, 1
-	b	1b
-2:	mov	x0, #'/'
-	call	uart_putb
-	next
-
-defcode PWORDBYTES, ".wordbytes"
-	pop	x11
-	mov	x10, #8
-
-1:	cmp	x10, xzr
-	beq	2f
-	ldr	x0, =bword_str
-	and	x1, x11, #0xFF
-	call	printf_
-	lsr	x11, x11, #8
-	sub	x10, x10, 1
-	b	1b
-2:	next
-
-.section .rodata
-bword_str:	.string "%02llX "
-.section .text
-
-defcode PWORD, ".word"
-	pop	x1
-	ldr	x0, =xword_str
-	call	printf_
-	next
-
-.section .rodata
-xword_str:	.string "%016llX "
-.section .text
-
-defcode	DEPTH, "depth"
-	loadvar	x0, S0
-	sub	x0, x0, dsp
-	asr	x0, x0, #3
-	sub	x0, x0, #1
-	push	x0
-	next
-
-defword DOTS, ".s"
-	fw	DSPFETCH
-	fw	LIT, 'S', EMIT, LIT, ':', EMIT, CR
-	fw	DEPTH
-	fw	DUP, ZGEQ
-	fw	ZBRANCH
-	fw	1f - .
-	fw	PMEM
-	fw	EXIT
-1:	fw	LIT, '<', DUP, EMIT, EMIT, CR
-	fw	EXIT
-
-defword DUMPVAL, "dumpval"
-	fw	DUP, PWORD		// ( nc addr )
-	fw	LIT, ':', EMIT
-	fw	LIT, 32, EMIT
-	fw	DUP, FETCH		// ( nc addr @addr )
-	fw	DUP, PWORD		// ( nc addr @addr )
-	fw	DUP, PWORDBYTES		// ( nc addr @addr )
-	fw	PWORDASCII		// ( nc addr )
-	fw	CR
-	fw	EXIT
-
-// ( addr cnt -- )
-defword PMEM, ".mem"
-1:	fw	QDUP			// ( addr cnt|0 cnt? -- )
-	fw	ZBRANCH
-	fw	2f - .
-	fw	DEC			// ( addr (cnt-1) )
-	fw	SWAP			// ( nc addr )
-	fw	DUMPVAL
-	fw	INCX8			// ( nc addr+8 )
-	fw	SWAP			// ( naddr nc )
-	fw	BRANCH
-	fw	1b - .
-
-2:	fw	DROP
-	fw	CR
-	fw	EXIT
-
-pword_str:	.string "%08llx "
-
-defword DD, "dd"
-	fw	EMIT
-	fw	LIT, ':', EMIT
-	fw	CR
-	fw	EXIT
 
 // ( addr u -- ) Create dict entry for word on stack
 defword STARCREATE, "*create"
@@ -1191,17 +1208,17 @@ defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	BRA
 	fw	EXIT
 
-// Given the name field of a word, move to its lfa
+// Given the lfa of a word, move to its name
 defcode TONAME, ">name"
 	pop	x0
-	sub	x1, x0, #8
+	add	x1, x0, #8
 	push	x1
 	next
 
 // Given the name field of a word, move to its lfa
 defcode NAMEFROM, "name>"
 	pop	x0
-	add	x1, x0, #8
+	sub	x1, x0, #8
 	push	x1
 	next
 
@@ -1211,8 +1228,7 @@ defword LATEST, "latest"
 
 defword LASTNAME, "last-name"
 	fw	GETCURRENT, FETCH
-	fw	LIT, 8
-	fw	ADD
+	fw	TONAME
 	fw	EXIT
 
 // Toggle hidden bit on the given dict entry (lfa)
@@ -1249,16 +1265,16 @@ defword	IMMEDIATE, "immediate", F_IMMEDIATE | F_BUILTIN
 // T:	LIT, addr
 // 	LIT, u
 defword SLITERAL, "sliteral", F_IMMEDIATE | F_BUILTIN
-	fw	LIT, BRANCH, COMMA
-	fw	DUP
-	fw	CELLPLUS
-	fw	ALIGNED
-	fw	COMMA
-	fw	HERE, SWAP
-	fw	DUP, ALIGNED
+	fw	LIT, BRANCH, COMMA	// compile branch
+	fw	DUP			// addr u u
+	fw	CELLPLUS		// addr u (u+8)
+	fw	ALIGNED			// addr u (u+8 aligned)
+	fw	COMMA			// Compile u+8 aligned (branch target)
+	fw	HERE, SWAP		// addr here u
+	fw	DUP, ALIGNED		// addr here u u'
 	fw	ALLOT
-	fw	OVER, LITERAL
-	fw	DUP, LITERAL
+	fw	OVER, LITERAL		// addr here u
+	fw	DUP, LITERAL		// addr here u
 	fw	CMOVE
 	fw	EXIT
 
@@ -1327,26 +1343,24 @@ toscs_impl:
 
 3:	ret
 
-// ( nameaddr -- ) Print a name pointed to by addr. Names have flags in the upper bits, so the length gets masked
-// making the max len of a name 32 (0x1f)
 defcode NTELL, "#ntell"
 	pop	x0
 	call	ntell_impl
 	next
 
 ntell_impl:
-	mov	x10, x0
-	ldrb	w4, [x10], #1
-	and	w4, w4, #0x1f
+	mov	scx0, x0
+	ldrb	scw1, [scx0], #1
+	// Mask flags
+	and	scx1, scx1, #0x1f
 
-1:	cmp	x4, xzr
-	beq	2f
+1:	cmp	scx1, xzr
+	ble	2f
 
-	sub	x4, x4, #1
-	ldrb	w0, [x10], #1
+	ldrb	w0, [scx0], #1
 	call	uart_putb
+	sub	scx1, scx1, #1
 	b	1b
-
 2:	ret
 
 // Note: caddrs here are SCS
@@ -1446,7 +1460,6 @@ matchxt_matched:
 
 5:	next
 
-
 // ( ... xt wlst -- ... )
 defword	EXECWORDLIST, "exec-wordlist"
 	fw	SWAP, TOR	// ( lfa r: xt )
@@ -1510,6 +1523,12 @@ defword	REPL, "repl"
 ok_msg:	.ascii "Ok.\n"
 	.equ	ok_msg_len, . - ok_msg
 
+defword NWORD, "@@nword"
+	fw	LIT, 16
+	fw	SUB
+	fw	NTELL
+	fw	EXIT
+
 // **** Outer interpreter
 // Repeat until the buffer is empty:
 //   PARSEWORD - lex single word from input
@@ -1570,6 +1589,7 @@ defword QEXECUTE, "?execute"
 	fw	LIT, noword_msg_len
 	fw	TELL
 	fw	TELL
+	fw	CR
 	fw	ABORT
 
 
@@ -1795,6 +1815,7 @@ defcode	QNUMBER, "?number"
 	// x10, copy of caddr; x11, copy of u
 	mov	x10, x0
 	mov	x11, x1
+	mov	x12, xzr
 
 	// x12, nonzero if the number is negative
 
@@ -2072,14 +2093,14 @@ defcode	KEY, "key"
 
 // ( addr len -- )
 defcode TYPE, "type"
-	pop2	x2, x1
+	pop2	scx3, scx4
 
-1:	cmp	x1, xzr
-	beq	2f
+1:	cmp	scx4, xzr
+	ble	2f
 
-	ldrb	w0, [x2], #1
+	ldrb	w0, [scx3], #1
 	call	uart_putc
-	sub	x1, x1, #1
+	sub	scx4, scx4, #1
 	b	1b
 
 2:	next
@@ -2112,6 +2133,8 @@ defword RC, "*rc"
 	fw	LIT, _binary_src_fith_rc_5_size
 	fw	EXIT
 
+// Invoke the compiled-in RC, setting the default dict flag to F_BUILTIN so that anything in the
+// RC is automatically case insensitive
 defword RUNRC, "runrc"
 	fw	LIT, F_BUILTIN
 	fw	DEFFLAG, STORE
@@ -2122,7 +2145,7 @@ defword RUNRC, "runrc"
 	fw	EXIT
 
 defcode ABORT, "abort"
-	b 	abort
+	b 	fith_abort
 	next
 
 hello_msg:	.string	"Welcome to Fith!\n"
@@ -2148,9 +2171,6 @@ reset_vector:	.quad	0
 // **** End of read-only dictionary section ****
 
 // Technically, everything above (except variables) can be in ROM since it is all static Fith dictionary words.
-// This word exists to link the user dictionary to the built in dictionary, and serves as the Fith entry point.
-// It just fetches the reset vector and invokes it. Should hang / reset / print a message / whatever if it ever
-// returns, since that means the reset routine returned.
 
 defword	VRESET, "vreset"
 avRESET:
@@ -2200,11 +2220,15 @@ return_stack:
 .text
 .align 3
 .global fith_boot
+.global fith_abort
 fith_boot:
 	mov	x0, sp
 	savevar	SP, x0
 
-abort:
+	ldr	x0, =0x400000	// Initial rtn stack and DS
+	savevar	CP, x0
+
+fith_abort:
 	ldr	dsp, =data_stack_top
 	savevar	S0, dsp
 
@@ -2226,9 +2250,6 @@ reset:
 
 	mov	x0, #10
 	savevar	BASE, x0
-
-	ldr	x0, =0x400000	// Initial rtn stack and DS
-	savevar	CP, x0
 
 	ldr	fip, =avRESET
 	next				// Next will start the interpreter with cold_start as the first word

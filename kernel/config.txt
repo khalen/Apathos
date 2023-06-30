@@ -22,7 +22,7 @@ arm_boost=1
 
 armstub=armstub8.img
 
-uart_2ndstage=1
+enable_jtag_gpio=1
+gpio=22-27=np
+gpio=22-27=a4
 
-# Run in high peri mode to avoid a 64mb memory gap at 0x7C00000000
-# arm_peri_high=1

@@ -22,7 +22,12 @@
 	str	x30,      [sp, #16 * 15]
 .endm
 
-.macro kernel_exit
+.macro kernel_exit reboot = 0
+.if	\reboot == 1
+	ldr	x0, =fith_abort
+	msr	elr_el1, x0
+.endif
+
 	ldp	x0,  x1,  [sp, #16 *  0]
 	ldp	x2,  x3,  [sp, #16 *  1]
 	ldp	x4,  x5,  [sp, #16 *  2]
@@ -60,6 +65,7 @@
 	mov	x5, x20
 	mov	x6, x22
 	bl	show_invalid_entry_message
+	kernel_exit 1
 	b	err_hang
 .endm
 
@@ -126,7 +132,7 @@ error_invalid_el0_32:
 handle_el1_irq:
 	kernel_entry
 	bl	handle_irq
-	kernel_exit
+	kernel_exit 0
 
 .globl err_hang
 err_hang:
