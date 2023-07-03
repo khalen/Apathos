@@ -1,4 +1,4 @@
-// This is Fith, an arm64 Forth variant. It is intended to have the minimum amount of primitive words to be:
+// This is Fith, an arm64 Forth var48iant. It is intended to have the minimum amount of primitive words to be:
 // reasonably fast, while remaining small enough to reason about. Inspired by Jonesforth, an amazing 32 bit I86
 // literate Forth written in assembly. We use a different dictionary format for and a couple of tricks for
 // something reasonably approaching efficiency,
@@ -325,13 +325,66 @@ defcode TWORFETCH, "2r@"	// (r: a b -- a b)
 	push2	x1, x0
 	next
 
+// These thoroughly nonstandard words speed up simple do-loops by knowing the
+// fact that the loop infos are at the top of the rstack
+// Probably simpler just to have an explicit cstack.
+defcode LIDXFETCH, "lidxr@"	// (r: a b _ -- a b)
+	ldr	x0, [rsp]
+	ldr	x1, [rsp, #8]
+	push2	x1, x0
+	next
+
+defcode LIDXSTORE, "lidxr!"	// ( a' b' --  r: a b _ -- r: a' b' _)
+	pop2	x0, x1
+	str	x1, [rsp]
+	str	x0, [rsp, #8]
+	next
+
+defcode LINCRFETCH, "lincr@"	// ( -- incr r: incr a b _ )
+	ldr	x0, [rsp, #16]
+	push	x0
+	next
+
+// ( inc -- flag , expects a b _ on return stack, updates b by inc
+defcode	LTEST, "looptest"
+	mov	x0, #1
+	b	looptest_impl
+
+// ( inc -- flag , expects a b _ on return stack, updates b by inc
+defcode	PLTEST, "+looptest"
+	pop	x0
+
+looptest_impl:
+	ldr	x1, [rsp]
+	ldr	x2, [rsp, #8]
+	sub	x3, x1, x2		// index - limit
+	movz	x4, #0x8000, lsl #48	// x4 = minint64_t
+	add	x3, x3, x4		// (index - limit) + minint
+	adds	x5, x0, x3		// If this overflows, the loop condition is met
+	csetm	x6, vs			// vs = oVerflow flag Set
+	add	x0, x0, x1		// New index
+	str	x0, [rsp]
+	push	x6
+	next
+
+// ( r: lj bj li bi ret )
+defcode	IIMPL, "i"
+	ldr	x0, [rsp]
+	push	x0
+	next
+
+// ( r: lj bj li bi ret )
+defcode	JIMPL, "j"
+	ldr	x0, [rsp, #16]
+	push	x0
+	next
+
 defcode	RDROP, "rdrop"	// (r: a --)
-	poprsp	x0
+	add	rsp, rsp, #8
 	next
 
 defcode TWORDROP, "2rdrop"
-	poprsp	x0
-	poprsp	x0
+	add	rsp, rsp, #16
 	next
 
 // *** Arithmetic ops
@@ -431,10 +484,30 @@ defcode	DIV8, "8/"	// (a -- a / 2)
 	push	x0
 	next
 
+defcode	UMUL, "u*"	// (a b -- a * b)
+	pop2	x1, x0
+	mul	x2, x1, x0
+	push	x2
+	next
+
 defcode	MUL, "*"	// (a b -- a * b)
 	pop2	x1, x0
 	mul	x2, x1, x0
 	push	x2
+	next
+
+defcode	MMUL, "m*"	// (a b -- d)
+	pop2	x1, x0
+	mul	x3, x1, x0
+	smulh	x2, x1, x0
+	push2	x2, x3
+	next
+
+defcode	UMMUL, "um*"	// (a b -- d)
+	pop2	x1, x0
+	mul	x3, x1, x0
+	umulh	x2, x1, x0
+	push2	x2, x3
 	next
 
 // This is signed division - not sure if the default / should be signed or unsigned
@@ -448,14 +521,16 @@ defcode DIV, "/"
 defcode	MOD, "mod"
 	pop2	x1, x0		// (a b --) x1 = a x0 = b
 	sdiv	x2, x1, x0	// x2 = a / b
-	smsubl	x0, w2, w0, x1	// x0 = a - ((a/b) * b)
+	mul	x3, x2, x0
+	sub	x0, x1, x3
 	push	x0
 	next
 
-defcode	DIVMOD, "/mod"	// (a b -- a/b a%b)
+defcode	DIVMOD, "/mod"	// (a b -- a%b a/b)
 	pop2	x1, x0
 	sdiv	x2, x1, x0
-	smsubl	x0, w2, w0, x1
+	mul	x3, x2, x0
+	sub	x0, x1, x3
 	push2	x0, x2
 	next
 
@@ -470,15 +545,17 @@ defcode UDIV, "u/"
 defcode	UMOD, "umod"
 	pop2	x1, x0		// (a b --) x1 = a x0 = b
 	udiv	x2, x1, x0	// x2 = a / b
-	umsubl	x0, w2, w0, x1	// x0 = a - ((a/b) * b)
+	mul	x3, x2, x0
+	sub	x0, x1, x3
 	push	x0
 	next
 
-defword	UDIVMOD, "u/mod"	// (a b -- a/b a%b)
+defword	UDIVMOD, "u/mod"	// (a b -- a%b a/b)
 	pop2	x1, x0
 	udiv	x2, x1, x0
-	umsubl	x0, w2, w0, x1
-	push2	x2, x0
+	mul	x3, x2, x0
+	sub	x0, x1, x3
+	push2	x0, x2
 	next
 
 defcode	LSHIFT, "lshift"	// (a b -- a << b)
@@ -530,6 +607,117 @@ defcode	XOR, "xor"
 	eor	x0, x1, x0
 	push	x0
 	next
+
+// *** Double words
+// ( d n -- n1 n2 ) 128 bit narrowing divide - d = hi lo   n = divisor  n1 = remain n2 = quot
+defcode UMDIVMOD, "um/mod"
+	pop3	x1, x0, x2
+	bl	umdivmod_impl
+	push2	x8, x0
+
+umdivmod_impl:
+	// arm64 does not have a 128b narrowing divide like amd64.
+	//   Algorithm and code taken from https://github.com/ridiculousfish/libdivide/blob/master/doc/divlu.c
+	cmp	x0, x2
+	bhs	1f
+
+	clz	x8, x2
+	lsl	x9, x2, x8
+	lsl	x10, x0, x8
+	neg	w11, w8
+	lsr	x11, x1, x11
+	cmp	x8, #0
+	csel	x11, xzr, x11, eq
+	orr	x10, x11, x10
+	lsl	x11, x1, x8
+	lsr	x12, x9, #32
+	udiv	x13, x10, x12
+	msub	w14, w13, w12, w10
+	and	x15, x9, #0xffffffff
+	mul	x16, x13, x15
+	extr	x14, x14, x11, #32
+	subs	x17, x16, x14
+	cmp	x17, x9
+	mov	x17, #-2
+	cinc	x17, x17, ls
+	cmp	x16, x14
+	csel	x14, x17, xzr, hi
+	add	x13, x14, x13
+	extr	x10, x10, x11, #32
+	and	x14, x13, #0xffffffff
+	msub	x10, x14, x9, x10
+	udiv	x14, x10, x12
+	msub	w12, w14, w12, w10
+	mul	x15, x14, x15
+	mov	x16, x11
+	bfi	x16, x12, #32, #32
+	subs	x12, x15, x16
+	cmp	x12, x9
+	mov	w12, #-2
+	cinc	w12, w12, ls
+	cmp	x15, x16
+	csel	w12, w12, wzr, hi
+	add	w12, w12, w14
+	bfi	x11, x10, #32, #32
+	msub	x9, x12, x9, x11
+	lsr	x8, x9, x8
+	orr	x0, x12, x13, lsl #32
+	ret
+
+1:	mov	x0, #-1
+	mov	x8, #-1
+	ret
+
+defcode SMREM, "sm/rem"
+	pop3	x1, x0, x2
+
+	// x9 == resulting sign of division
+	eor	x9, x0, x2
+	mov	x10, #-1
+	lsr	x10, x10, 1
+	and	x9, x9, x10
+
+	and	x0, x0, x10
+	and	x2, x2, x10
+
+	bl	umdivmod_impl
+	orr	x0, x0, x10
+
+	push2	x8, x0
+
+// ( d1 d2 -- d3 )  Each double is lo hi on the stack so eg x1 = hi part of 1st d
+defcode DADD, "d+"
+	pop4	x0, x1, x2, x3
+	adds	x5, x0, x2
+	adc	x6, x1, x3
+	push2	x5, x6
+	next
+
+// Equivalent to "POP" on 2s compliment machines. I have never encountered a 1s or other complement anything.
+defcode DTOS, "d>s"
+	add	dsp, dsp, #8
+	next
+
+defcode	DNEGATE, "dnegate"
+	pop2	x0, x1
+dnegate_impl:
+	subs	x2, xzr, x0
+	sbc	x3, xzr, x1
+	push2	x2, x3
+	next
+
+// ( d1 n -- d2 )	where d2 shares sign with N
+defcode DPLUSMINUS, "d+-"
+	pop3	x0, x1, x2
+	eor	x3, x1, x2	// x3 < 0 when d1 needs negating
+	cmp	x3, xzr
+	blt	dnegate_impl
+	next
+
+defword	DABS, "dabs"
+	fw	LIT, 10		// Arbitrary as long as it's positive
+	fw	DPLUSMINUS
+	fw	EXIT
 
 // *** Booleans & comparison
 defcode	TRUE, "true"
@@ -1074,7 +1262,6 @@ defcode TOCFA, ">cfa"
 
 // (cfa -- lfa) Given a CFA / xt of a word, move to its link field address
 defcode CFAFROM, "cfa>"
-.fcfacode:
 	pop	x0
 	sub	x0, x0, #24	// 3 words
 	push	x0
@@ -1082,14 +1269,12 @@ defcode CFAFROM, "cfa>"
 
 // ( cfa -- data ) Given the CFA of a word, move to the data (body) field
 defcode TOBODY, ">body"
-.bodycode:
 	pop	x0
 	add	x0, x0, #8
 	push	x0
 	next
 
 defcode BODYFROM, "body>"
-.fbodycode:
 	pop	x0
 	sub	x0, x0, #8
 	push	x0
@@ -1143,6 +1328,11 @@ defword KET, "]"
 defcode	BREAK, "brk"
 	pop	x0
 	push	x0
+	next
+
+defcode TTICK, "''"
+	ldr	x1, [fip], #8
+	push	x1
 	next
 
 // ( addr u -- ) Create dict entry for word on stack
@@ -1231,6 +1421,15 @@ defword LASTNAME, "last-name"
 	fw	TONAME
 	fw	EXIT
 
+// Toggle hidden bit on the dict entry at TOS
+defcode TOGGLEHIDE, "toggle-hide"
+	pop	x0
+	add	x0, x0, #8	// Move to name field
+	ldrb	w1, [x0]
+	eor	w1, w1, #F_HIDDEN
+	strb	w1, [x0]
+	next
+
 // Toggle hidden bit on the given dict entry (lfa)
 // ( lfa -- )
 defcode	HIDENAME, "hide-name"
@@ -1248,6 +1447,12 @@ defcode	UNHIDENAME, "unhide-name"
 	and	w1, w1, #~F_HIDDEN
 	strb	w1, [x0]
 	next
+
+// Toggle hidden bit on the dict entry at TOS
+defword TOGGLEHIDELATEST, "toggle-hide-latest"
+	fw	LATEST
+	fw	TOGGLEHIDE
+	fw	EXIT
 
 defword	IMMEDIATE, "immediate", F_IMMEDIATE | F_BUILTIN
 	fw	LASTNAME
@@ -2022,17 +2227,9 @@ defword WARMSTART, "*warmstart"
 
 defword COLDSTART, "*coldstart"
 cold_start:
-	fw	LIT, hello_msg
-	fw	PRINTF_
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
-	#if 0
-	fw	LIT, rc_msg
-	fw	PRINTF_
-	fw	RUNRC
-	fw	LIT, rc_done_msg
-	fw	PRINTF_
-	#endif
+	//fw	RUNRC
 	fw	REPL
 	fw	EXIT
 
@@ -2128,6 +2325,65 @@ defcode	REFILL, "refill"
 .ref_done:
 	next
 
+// This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
+// "assemble" it into other words without having to keep it in sync in more than one place.
+.macro	next_impl, wrapper:vararg=
+	\wrapper ldr	x0, [fip], #8
+	\wrapper ldr	x1, [x0]
+	\wrapper br	x1
+.endm
+
+.macro compile_insn, insn:vararg
+	fw	LIT
+	\insn
+.align 3
+	fw	COMMA
+.endm
+
+// ** DODOES support **
+
+// A create...does> word is basically a special create...;code
+// word, where the forth words follow $dodoes. $dodoes thus
+// adjusts FIP to point right past $dodoes and does next.
+//
+// You can think of this as a special DOCOL that sets FIP to a
+// certain offset into the create...does> word's DFA. The offset
+// corresponds to the words following the instructions emitted
+// by $dodoes. Those instructions do an absolute branch to
+// to _DODOES, hence the words to execute are at LR + 8.
+//
+// - Just like DOCOL, we enter with CFA in x0.
+// - Just like DOCOL, we need to push (old) FIP for exit to pop.
+// - The fith words expect DFA (i.e. CFA + 8) on stack.
+_DODOES:
+	pushrsp fip
+	mov fip, lr
+	add fip, fip, #8
+	add x0, x0, #8
+	push x0
+	next
+
+dodoes_body:
+	ldr	scx0, . + 8
+	blr	scx0
+	fw	_DODOES
+	.equ	dodoes_body_size, . - dodoes_body
+
+// $dodoes ( -- addr u )  Pushes the string containing the machine code to be emitted by does> into the modified word
+defword ASMDODOES, "$dodoes"
+	fw	LIT, dodoes_body
+	fw	LIT, dodoes_body_size
+	fw	EXIT
+
+	.purgem compile_insn
+
+// $next ( -- addr u ) Pushes the string containing the machine code that implements NEXT, used for ;CODE defs
+// code or ;code defined words.
+defword ASMNEXT, "$next"
+	fw	LIT, _NEXT
+	fw	LIT, next_impl_size
+	fw	EXIT
+//
 defword RC, "*rc"
 	fw	LIT, _binary_src_fith_rc_5_start
 	fw	LIT, _binary_src_fith_rc_5_size
@@ -2148,14 +2404,7 @@ defcode ABORT, "abort"
 	b 	fith_abort
 	next
 
-hello_msg:	.string	"Welcome to Fith!\n"
 test_msg:	.string "This is a printf_ test: %s %ld %c\nShould read: Test 123456 c\n"
-test_str:	.string	"Test"
-enter_msg:	.string "Interpreter entered"
-rc_msg:		.string	"Evaluating rc.5..."
-rc_done_msg:	.string	"Done\n"
-word_msg:	.string "Parsed word: ("
-pword_msg:	.string ")\n"
 noword_msg:	.ascii "? "
 	        .equ	noword_msg_len, . - noword_msg
 
@@ -2254,14 +2503,6 @@ reset:
 	ldr	fip, =avRESET
 	next				// Next will start the interpreter with cold_start as the first word
 
-// This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
-// "assemble" it into other words without having to keep it in sync in more than one place.
-.macro	next_impl, wrapper:vararg=
-	\wrapper ldr	x0, [fip], #8
-	\wrapper ldr	x1, [x0]
-	\wrapper br	x1
-.endm
-
 	// Default variables just push the address of their data field onto the stack
 _DOVAR:
 	add	x1, x0, #8
@@ -2282,3 +2523,5 @@ _DOCOL:
 
 _NEXT:
 	next_impl
+.align 3
+	.equ next_impl_size, . - _NEXT

@@ -1,20 +1,21 @@
 : .( ')' parse type ; IMMEDIATE
-.( Booting from internal rc.5...) cr
+.( Booting from internal rc.5...)
 
 : \ 10 parse 2drop ; IMMEDIATE
 \ Now we have backslash comments!
 \
-: ( ')' parse 2drop ; IMMEDIATE
-( Now we have non nested paren comments )
-
+\ The ordering of early words in this boot file has the goal of supporting nested paren
+\   comments as early as possible in the process, then defining only the words needed
+\   to implement POSTPONE so we can use it for the rest of the control flow etc.
+\
 \ Words in this file are defined in lower case; that's because when running the RC,
 \   all words automatically get the F_BUILTIN flag. This compares the downcased version
 \   of a search word with the name in the dictionary, allowing upper or lower case to
 \   match builtins. This only works if the words themselves are lower case.
 
 : '
-  \ Can't use IF yet
-  parse-word find-word dup 0= ?dup 2drop ;
+ \ Can't use IF yet
+ parse-word find-word dup 0= ?dup 2drop ;
 
 \ We really only need this until we have postpone, but it makes defining early control
 \ flow words easier. This only works because we're a traditional explicit return stack
@@ -30,45 +31,6 @@
 \ Char handling
 : char		parse-word drop c@ ;
 : [char]	char [compile] literal ; IMMEDIATE
-.( Now we can print messages!)
-
-\ RECURSE makes a recursive call to the word that's currently being compiled.
-\   Get the latest word created, move to its cfa, and compile that
-: recurse
-  latest >cfa compile, ; IMMEDIATE
-
-\ Define some useful constants
-
-\ Newline is ASCII 10
-: '\n' 10 ;
-
-\ ' ' is ascii 32
-: bl	32 ;
-
-\ SPACE prints a space
-: space bl emit ;
-
-\ NOT (boolean)
-: not 0= ;
-
-\ Misc math
-: signum	\ x -- -1/0/1
-	dup 0< swap 0> - ;
-
-: depth
-  stack drop - 1 cells / ;
-
-: variable	create 1 cells allot ;
-: wordlist \ -- wid
-  here 1 cells allot ;
-
-: count	\ caddr -- addr' ch
-  dup 1+ swap c@ ;
-
-: /string		\ ( addr u n -- addr' u' )
-  tuck -
-  >r + r>
-;
 
 \ *** Control structures ***
 \ condition IF truepart THEN rest
@@ -81,11 +43,6 @@
 	*compile 0branch	\ Compile 0branch
 	here				\ Remember where we are (on dstack)
 	0 ,					\ Compile dummy offset
-; IMMEDIATE
-
-: unless
-  *compile not
-  [compile] if
 ; IMMEDIATE
 
 : then
@@ -106,7 +63,7 @@
 ; IMMEDIATE
 
 : s"
-  34 parse
+  '"' parse
   [compile] sliteral
 ; IMMEDIATE
 
@@ -117,6 +74,7 @@
   0 ,
   [compile] s"
   *compile type
+  *compile cr
   *compile abort
   here
   over -
@@ -125,8 +83,10 @@
 
 \ POSTPONE compiles a call to the following word, whether it is an immediate word or not.
 : postpone
-  parse-word find-word		\ ( -- 0 | xt 1 | xt -1 )
-  ?dup 0= abort" Postpone not"
+  parse-word 2dup find-word		\ ( -- addr u 0 | xt 1 | xt -1 )
+  ?dup 0= if
+	type ' ' emit true abort"  postpone?"
+  then
 
   \ xt +- 1
   0> if
@@ -137,8 +97,8 @@
 	[ ' literal compile, ]
 	['] compile, compile,
   then
+  2drop
 ; IMMEDIATE
-
 
 \ ** Looping constructs
 : begin
@@ -146,6 +106,7 @@
 ; IMMEDIATE
 
 : until
+  postpone 0branch
   here -
   ,
 ; IMMEDIATE
@@ -166,6 +127,237 @@
   swap !
 ; IMMEDIATE
 
+\ NOT (boolean)
+: not 0= ;
+
+: unless
+  postpone not
+  [compile] if
+; IMMEDIATE
+
+\ Read the next chr from the input source
+\ ( -- char flag ) Flag is true if char is valid, false if we hit the end of input.
+: inch >in @ in@ in+ ;
+
+\ Implement nestable paren comments. This scans the input forward using inch, keeping a count of
+\ seen ( characters, and watching for the equivalent number of ).
+: (
+  1
+  begin
+	inch if				\ Get next chr is it valid?
+	  dup '(' = if		\ If open paren, increment count
+		drop
+		1+
+	  else				\ If close paren, decrement count
+		')' = if
+		  1-
+		then
+	  then
+	else				\ If chr not valid, bail immediately by resetting count
+	  drop 0
+	then
+  dup 0= until
+  drop
+; IMMEDIATE
+
+( We now (have ((nested)) comments!) Yay!)
+
+( addr u -- ) \ Compile the given string directly at HERE
+: compile-str
+  here				( addr u haddr )
+  over allot align	( addr u haddr )
+  swap cmove
+;
+
+: *emit-next 	 $next	 compile-str ;
+: *emit-doesbody $dodoes compile-str ;
+: *fix-cfa r> latest >cfa ! ;
+
+\ does> creates a "defining word." A defining word, when executed, will create a new definition,
+\ then emit a code sequence causing a jump from that word to the code sequence following the does>.
+: does>
+  postpone  *fix-cfa
+  *emit-doesbody
+; IMMEDIATE
+
+: hide-name
+  parse-word 2dup find-word		( addr u 0 | xt 1 | xt -1 )
+  ?dup if						( addr u | xt )
+	drop
+	cfa>
+	toggle-hide
+	2drop
+  else
+	type
+	' ' emit
+	0 abort" unknown in hide-name"
+  then
+;
+
+\ ** Variables, constants, values etc.
+
+: 2! ( x1 x2 addr -- )	tuck !	cell+ ! ;
+: 2@ ( addr -- x1 x2 )	dup cell+ @ swap @ ;
+
+: variable	create 1 cells allot ;
+: 2variable	create 2 cells allot ;
+: wordlist	( -- wid )	here 1 cells allot ;
+
+: constant	variable latest	>cfa >body ! does> @ ;
+
+: 2constant	2variable latest >cfa >body 2! does> 2@ ;
+
+: value constant ;
+: to
+  ' >body
+  state @ if
+	[compile] literal
+	postpone !
+  else
+	!
+  then
+; IMMEDIATE
+
+\ **** DO, ?DO, LOOP, +LOOP
+create		do-stack 8 cells allot
+variable	do-sp	 0 do-sp !
+  : do-addr	do-stack do-sp @ cells + ;
+
+  : >do     do-addr ! 1 do-sp +! ;
+  : do>		-1 do-sp +! do-addr @ ;
+
+: do	( limit base -- )
+		( c: -- do-token )
+		( do-stack: -- leave-token )
+	postpone 2>r	( we implement cstack with our return stack - separate c-stack might be faster? )
+	0 >do here		( do-token )
+; IMMEDIATE
+
+: unloop	( r: inc limit index -- )
+  r> 2r> 2drop >r
+;
+
+( Push the current leave token on the do stack
+  onto the leave linked-list at here.
+  Replace current leave token with here.
+)
+: push-leave
+  here do>
+  , >do
+;
+
+: ?do	( limit base -- )
+	    ( c: -- do-token )
+	    ( do-stack: -- leave-token )
+  postpone 2dup
+  [compile] do
+  postpone <>
+  postpone 0branch
+  push-leave
+  drop here
+; IMMEDIATE
+
+: leave
+  postpone branch
+  push-leave
+; IMMEDIATE
+
+\ fix up the given leave token and return the next
+: fix-leave		( leave-token -- leave-token' )
+  dup @ swap	( leave-token' leave-token )
+  here over		( leave-token' leave-token here leave-token )
+  - swap !		( leave-token! )
+;
+
+: loop-impl
+  postpone 0branch
+  here				( do-token here )
+  -					( byte offset )
+  ,
+
+  \ Fix linked list of leave-tokens
+  do> 		( leave-token )
+  begin
+	?dup while
+	fix-leave
+  repeat
+  postpone 2r>
+  postpone 2drop
+;
+
+: loop
+  postpone looptest
+  loop-impl
+; IMMEDIATE
+
+: +loop
+  postpone +looptest
+  loop-impl
+; IMMEDIATE
+
+(
+: test-loop
+  'Z' 'A' do
+	i emit
+  loop
+
+  'A' 'Z' do
+	i emit
+	-1
+  +loop
+
+  'Z' 'B' do
+	i emit
+	i 'A' do
+	  i emit
+	  j 'D' = if
+		leave
+	  then
+	loop
+	cr
+  loop
+
+  cr
+;
+
+.( Testing loop:)
+test-loop
+.( done ) cr
+)
+
+\ ****Misc math and convenience
+
+\ RECURSE makes a recursive call to the word that's currently being compiled.
+\   Get the latest word created, move to its cfa, and compile that
+: recurse
+  latest >cfa compile, ; IMMEDIATE
+
+: decimal 10 base ! ;
+: hex     16 base ! ;
+
+: d0= ( xd -- flag )	or 0= ;
+: s>d ( n -- d )		dup 0< ;
+
+: */mod  ( n1 n2 n3 -- rem quot )	>r m* r> sm/rem ;
+: */     ( n1 n2 n3 -- quot )		*/mod nip ;
+
+: signum	\ x -- -1/0/1
+	dup 0< swap 0> - ;
+
+: depth
+  stack drop - 1 cells / ;
+
+: wordlist \ -- wid
+  here 1 cells allot ;
+
+: count	\ caddr -- addr' ch
+  dup 1+ swap c@ ;
+
+: /string		\ ( addr u n -- addr' u' )
+  tuck -
+  >r + r>
+;
+
 : find			\ caddr -- caddr 0|xt 1|xt -1
   >r r@ count	\ ( addr u )
   find-word		\ ( 0 | xt 1 | xt -1 )
@@ -176,9 +368,55 @@
   then
 ;
 
-: decimal 10 base ! ;
-: hex     16 base ! ;
+: word \ char "<chars>ccc<char>" -- caddr
+  dup dup 1+ skip			\ Skip leading delimiter(s)
+  dup 1+ swap parse-token	\ Grab word ( low hi -- addr u )
+  >r here 1+ r@ cmove		\ Word will be copied to here+1 .. here+(len+1), 1st byte reserved for count
+  r> here c!				\ Store count
+  here
+;
 
+\ *** Printing
+
+: char+		( addr -- addr' )	1+ ;
+: chars		( m -- n )	;
+
+\ PAD
+256 constant pad-size
+here pad-size allot value pad
+
+\ PIC
+300 aligned constant pic-size
+
+here pic-size allot pic-size +
+value pic-end
+
+variable pic		0 pic !
+
+\ Newline is ASCII 10
+: '\n' 10 ;
+
+\ ' ' is ascii 32
+: bl	32 ;
+
+\ SPACE prints a space
+: space bl emit ;
+
+: spaces	( n -- )
+  dup 0> if
+	0 do
+	  space
+	loop
+  then
+;
+
+: ."
+  postpone s"
+  postpone type
+; IMMEDIATE
+
+\ *** Printing numbers
+( num -- )
 : u.
   base @ /mod
   ?dup if
@@ -195,12 +433,106 @@
   emit
 ;
 
-: word \ char "<chars>ccc<char>" -- caddr
-  dup dup 1+ skip			\ Skip leading delimiter(s)
-  dup 1+ swap parse-token	\ Grab word ( low hi -- addr u )
-  >r here 1+ r@ cmove		\ Word will be copied to here+1 .. here+(len+1), 1st byte reserved for count
-  r> here c!				\ Store count
-  here
+\ Non destructively print the stack
+: .s
+  dsp@
+  begin
+	dup s0 @ <
+  while
+	dup @ u.
+	space
+	8+
+  repeat
+  cr
+  drop
 ;
+
+\ Return the width in characters of an unsigned number in the current base
+\ ( u -- width )
+: uwidth
+  base @ /
+  ?dup if
+	recurse 1+
+  else
+	1
+  then
+;
+
+\ Print a number right justified in a field of width chars
+: u.r	( u width -- )
+  swap		( width u )
+  dup		( width u u )
+  uwidth	( width u uwidth )
+  rot		( u uwidth width )
+  swap -	( u width-uwidth )
+  ( At this point if we asked for a width narrower than the number, it'll be negative. )
+  ( Spaces won't print a negative number of spaces anyway, so it's safe to call.)
+  spaces
+  u.
+;
+
+\ Print a signed number, padded to a certain width.
+: .r		( n width -- )
+  swap		( width n)
+  dup 0< if
+	negate		( width u)
+	1			( flag to remember it was negative | width n 1 )
+	swap
+	rot
+	1-			( 1 u width-1   -1 to account for the - sign in the output )
+  else
+	0			( width u 0 )
+	swap		( width 0 u )
+	rot			( 0 u width )
+  then
+  swap			( flag width u )
+  dup uwidth	( flag width u uwidth )
+  rot			( flag u uwidth width )
+  swap -		( flag u width - uwidth )
+
+  spaces		( flag u )
+  swap			( u flag )
+
+  if '-' emit then	( print - if it was originally negative )
+  u.
+;
+
+\ Finally we get to define .
+: . 0 .r space ;
+
+\ We reach the point where we have the first word we want defined in terms of its previous version.
+\ We need a new version of : that implements the hiding of the word under definition so only the
+\ previous one is found otherwise we will generate a word that calls itself and explodes the return stack.
+: :
+	create
+	*docol
+	here body> !
+	toggle-hide-latest
+	]
+;
+
+: ;
+  toggle-hide-latest
+  postpone exit
+  [
+; IMMEDIATE
+
+
+\ The real u. has a trailing space in the standard
+: u. u. space ;
+
+\ *** code / code; and friends
+: ;code
+  postpone *fix-cfa
+; IMMEDIATE
+
+: (code) here latest >cfa ! ;
+: code : (code) ;
+: (end-code-int) latest toggle-hide [compile] [ ;
+: (end-code) (end-code-int) ; IMMEDIATE
+: end-code [compile] *emit-next (end-code-int) ; IMMEDIATE
+hide-name (end-code-int)
+hide-name (end-code)
+hide-name (code)
 
 .( Done.) cr
