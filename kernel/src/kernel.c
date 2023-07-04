@@ -54,9 +54,9 @@ void getKernel()
 	printf("*** Read %ld bytes.\n");
 }
 
-u64	kernel_readline(char *destBuffer, u64 maxLen)
+u64	kernel_readline(char *destBuffer, u64 maxLen, u64 prompt)
 {
-	const char* lineOut = linenoise("> ");
+	const char* lineOut = linenoise( prompt ? "> " : "" );
 	u64 len = strlen(lineOut);
 	memcpy(destBuffer, lineOut, len);
 	destBuffer[len] = 10;

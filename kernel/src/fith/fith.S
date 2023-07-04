@@ -51,8 +51,6 @@ scw5	.req	w28
 	ldp	x29, x30, [sp], #32
 .endm
 
-
-
 // Push and pop to the return stack
 .macro	pushrsp	reg
 	str	\reg, [rsp, #-8]!
@@ -1288,6 +1286,7 @@ defword	CREATE, "create"
 
 defword COLON, ":"
 	fw	CREATE
+	fw	LIT, 0, PROMPTENABLED, STORE
 	fw	LIT, _DOCOL	// Change the cfa of the word just created to _DOCOL from _DOVAR
 	fw	HERE, BODYFROM
 	fw	STORE
@@ -1300,6 +1299,7 @@ defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	COMMA
 	fw	BRA
 	fw	TOGGLEHIDELATEST
+	fw	LIT, 1, PROMPTENABLED, STORE
 	fw	EXIT
 
 // Given the lfa of a word, move to its name
@@ -1740,6 +1740,9 @@ defword	REPL, "repl"
 	fw	ZBRANCH
 	fw	1b - .
 	fw	INTERPRETLINE
+	fw	PROMPTENABLED, FETCH
+	fw	ZBRANCH
+	fw	1b - .
 	fw	LIT, ok_msg
 	fw	LIT, ok_msg_len
 	fw	TELL
@@ -2252,26 +2255,6 @@ cold_start:
 	fw	REPL
 	fw	EXIT
 
-defcode PRINTF_, "printf"
-	pop	x0
-	call	printf_
-	next
-
-defcode PRINTF_1, "printf1"
-	pop2	x0, x1
-	call	printf_
-	next
-
-defcode PRINTF_2, "printf2"
-	pop3	x0, x1, x2
-	call	printf_
-	next
-
-defcode PRINTF_3, "printf3"
-	pop4	x0, x1, x2, x3
-	call	printf_
-	next
-
 defcode	EMIT, "emit"
 	pop	x0
 	call	uart_putc
@@ -2329,6 +2312,7 @@ defcode	REFILL, "refill"
 
 	ldr	x0, =default_input_buffer
 	ldr	x1, =default_input_buffer_len
+	loadvar	x2, PROMPTENABLED
 
 	call	kernel_readline
 
@@ -2466,6 +2450,8 @@ defvar BASE, "base", 10
 
 defvar	DEFFLAG, "default-flag", 0
 
+defvar	PROMPTENABLED, "prompt-enabled", 1
+
 defvar CURRENT, "current", var_THEWL
 
 defvar THEWL, "thewl", name_THEWL
@@ -2518,6 +2504,9 @@ reset:
 
 	mov	x0, #10
 	savevar	BASE, x0
+
+	mov	x0, #1
+	savevar PROMPTENABLED, x0
 
 	ldr	fip, =avRESET
 	next				// Next will start the interpreter with cold_start as the first word
