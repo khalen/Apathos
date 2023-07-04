@@ -62,9 +62,14 @@
 	swap !
 ; IMMEDIATE
 
+  \ -- addr u
 : s"
   '"' parse
-  [compile] sliteral
+  state @ if
+	\ Compiling
+	[compile] sliteral
+  then
+  \ In interpreting state, just let
 ; IMMEDIATE
 
 \ 0= if <perror> then ...
@@ -162,6 +167,9 @@
 
 ( We now (have ((nested)) comments!) Yay!)
 
+: h,	( half -- )	here 2 allot h! ;
+: w,	( word -- )	here 4 allot w! ;
+
 ( addr u -- ) \ Compile the given string directly at HERE
 : compile-str
   here				( addr u haddr )
@@ -204,7 +212,6 @@
 : wordlist	( -- wid )	here 1 cells allot ;
 
 : constant	variable latest	>cfa >body ! does> @ ;
-
 : 2constant	2variable latest >cfa >body 2! does> 2@ ;
 
 : value constant ;
@@ -217,6 +224,21 @@
 	!
   then
 ; IMMEDIATE
+
+: to
+  ' >body
+  state @ if
+	[compile] literal
+	postpone +!
+  else
+	+!
+  then
+; IMMEDIATE
+
+$20 constant	f_hidden
+$40 constant	f_builtin
+$80 constant	f_immediate
+$1F constant	f_len_mask
 
 \ **** DO, ?DO, LOOP, +LOOP
 create		do-stack 8 cells allot
@@ -247,8 +269,8 @@ variable	do-sp	 0 do-sp !
 ;
 
 : ?do	( limit base -- )
-	    ( c: -- do-token )
-	    ( do-stack: -- leave-token )
+	  	( c: -- do-token )
+	  	( do-stack: -- leave-token )
   postpone 2dup
   [compile] do
   postpone <>
@@ -294,36 +316,6 @@ variable	do-sp	 0 do-sp !
   postpone +looptest
   loop-impl
 ; IMMEDIATE
-
-(
-: test-loop
-  'Z' 'A' do
-	i emit
-  loop
-
-  'A' 'Z' do
-	i emit
-	-1
-  +loop
-
-  'Z' 'B' do
-	i emit
-	i 'A' do
-	  i emit
-	  j 'D' = if
-		leave
-	  then
-	loop
-	cr
-  loop
-
-  cr
-;
-
-.( Testing loop:)
-test-loop
-.( done ) cr
-)
 
 \ ****Misc math and convenience
 
@@ -401,24 +393,39 @@ variable pic		0 pic !
 
 \ SPACE prints a space
 : space bl emit ;
+: repchar	( char n -- )
+  dup 0>	( char n flag )
+  if
+	0 do	( char )
+		dup emit
+	loop
+  else
+	drop
+  then
+  drop
+;
+
+: zeroes	( n -- )
+  '0' swap repchar
+;
 
 : spaces	( n -- )
-  dup 0> if
-	0 do
-	  space
-	loop
-  then
+  bl swap repchar
 ;
 
 : ."
   postpone s"
-  postpone type
+  state @ if
+	postpone type
+  else
+	type
+  then
 ; IMMEDIATE
 
 \ *** Printing numbers
 ( num -- )
 : u.
-  base @ /mod
+  base @ u/mod
   ?dup if
 	recurse
   then
@@ -450,7 +457,7 @@ variable pic		0 pic !
 \ Return the width in characters of an unsigned number in the current base
 \ ( u -- width )
 : uwidth
-  base @ /
+  base @ u/
   ?dup if
 	recurse 1+
   else
@@ -458,8 +465,9 @@ variable pic		0 pic !
   then
 ;
 
-\ Print a number right justified in a field of width chars
-: u.r	( u width -- )
+\ Print a number right justified in a field of width chars. xt is expected to print the padding.
+: xu.r	( u width xt -- )
+  >r
   swap		( width u )
   dup		( width u u )
   uwidth	( width u uwidth )
@@ -467,15 +475,24 @@ variable pic		0 pic !
   swap -	( u width-uwidth )
   ( At this point if we asked for a width narrower than the number, it'll be negative. )
   ( Spaces won't print a negative number of spaces anyway, so it's safe to call.)
-  spaces
+  r> execute
   u.
 ;
 
+: u.r			( u wid -- )
+  ['] spaces	( u wid xt )
+  xu.r ;
+
+: u.0r
+  ['] zeroes
+  xu.r ;
+
 \ Print a signed number, padded to a certain width.
-: .r		( n width -- )
-  swap		( width n)
+: x.r		( n width xt -- )
+  >r
+  swap		( width n )
   dup 0< if
-	negate		( width u)
+	negate		( width u )
 	1			( flag to remember it was negative | width n 1 )
 	swap
 	rot
@@ -489,37 +506,280 @@ variable pic		0 pic !
   dup uwidth	( flag width u uwidth )
   rot			( flag u uwidth width )
   swap -		( flag u width - uwidth )
-
-  spaces		( flag u )
+  r> execute
   swap			( u flag )
 
   if '-' emit then	( print - if it was originally negative )
   u.
 ;
 
+: .r
+  ['] spaces
+  x.r ;
+
+: .0r
+  ['] zeroes
+  x.r ;
+
 \ Finally we get to define .
 : . 0 .r space ;
 
-\ We reach the point where we have the first word we want defined in terms of its previous version.
-\ We need a new version of : that implements the hiding of the word under definition so only the
-\ previous one is found otherwise we will generate a word that calls itself and explodes the return stack.
-: :
-	create
-	*docol
-	here body> !
-	toggle-hide-latest
-	]
-;
-
-: ;
-  toggle-hide-latest
-  postpone exit
-  [
-; IMMEDIATE
-
-
 \ The real u. has a trailing space in the standard
 : u. u. space ;
+
+: ? ( addr -- ) @ . ;
+
+: cells+ ( x n -- x+n cells )	cells + ;
+
+\ Print the name of a word given its lfa
+: id.	( addr -- )
+  >name				( nfa )
+  dup				( nfa nfa )
+  c@ F_LEN_MASK and	( nfa len )
+  dup 15 > >r
+  15 min
+  swap 1+ swap		( nfa+1 len )
+  type
+  r> if '+' emit then
+  bl emit
+;
+
+: ?word-flag	( lfa wf -- flag )
+  swap >name	( wf naddr )
+  c@			( wf flagbyte )
+  and 0<>		( true iff wf @ flagbyte )
+;
+
+: ?hidden	( lfa -- flag )
+  F_HIDDEN ?word-flag
+;
+
+: ?builtin	( lfa -- flag )
+  F_BUILTIN ?word-flag
+;
+
+: ?immediate	( lfa -- flag )
+  F_IMMEDIATE ?word-flag
+;
+
+: words		( -- )
+  latest
+  begin
+	?dup
+  while
+	dup ?hidden unless
+	  dup id.
+	then
+	@
+  repeat
+  cr
+;
+
+: codepage create align
+	\ The individual values will be backwards on the stack, ie. the 255th cp is first
+	256 0 do
+	  h,
+	loop
+
+	does>
+	( cp addr -- unicode )
+	swap $ff swap - 2* + h@
+;
+
+\ Only one we currently define is the IBM / DOS codepage (codepage 437, from wikipedia)
+hex
+0020 263A 263B 2665 2666 2663 2660 2022 25d8 25c8 25d9 2642 2640 266a 266b 263c  \ 0x / 0
+25ba 25c4 2195 203c 00b6 00a7 25ac 21ab 2191 2193 2192 2190 221f 2194 25b2 25bc  \ 1x / 16
+0020 '!'  '"'  '#'  '$'  '%'  '&'  '''  '('  ')'  '*'  '+'  ','  '-'  '.'  '/'   \ 2x / 32
+'0'  '1'  '2'  '3'  '4'  '5'  '6'  '7'  '8'  '9'  ':'  ';'  '<'  '='  '>'  '?'   \ 3x / 48
+'@'  'A'  'B'  'C'  'D'  'E'  'F'  'G'  'H'  'I'  'J'  'K'  'L'  'M'  'N'  'O'   \ 4x / 64
+'P'  'Q'  'R'  'S'  'T'  'U'  'V'  'W'  'X'  'Y'  'Z'  '['  '\'  ']'  '^'  '_'   \ 5x / 80
+'`'  'a'  'b'  'c'  'd'  'e'  'f'  'g'  'h'  'i'  'j'  'k'  'l'  'm'  'n'  'o'   \ 6x / 96
+'p'  'q'  'r'  's'  't'  'u'  'v'  'w'  'x'  'y'  'z'  '{'  '|'  '}'  '~'  2302  \ 7x / 112
+00c7 00fc 00e9 00e2 00e4 00e0 00e5 00e7 00ea 00eb 00e8 00ef 00ee 00ec 00c4 00c5  \ 8x / 128
+00c9 00e6 00c6 00f4 00f6 00f2 00fb 00f9 00ff 00d6 00dc 00a2 00a3 00a5 20a7 0192  \ 9x / 144
+00e1 00ed 00f3 00fa 00f1 00d1 00aa 00ba 00bf 2310 00ac 00bd 00bc 00a1 00ab 00bb  \ Ax / 160
+2591 2592 2593 2502 2524 2561 2562 2556 2555 2563 2551 2557 255d 255c 255b 2510  \ Bx / 176
+2514 2534 252c 251c 2500 253c 255e 255f 255a 2554 2569 2566 2560 2550 256c 2567  \ Cx / 192
+2568 2564 2565 2559 2558 2552 2553 256b 256a 2518 250c 2588 2584 258c 2590 2580  \ Dx / 208
+03b1 00df 0393 03c0 03a3 03c3 00b5 03c4 03a6 0398 03a9 03b4 221e 03c6 03b5 2229  \ Ex / 224
+2261 00b1 2265 2264 2320 2321 00f7 2248 00b0 2219 00b7 221a 207f 00b2 25a0 00a0  \ Fx / 240
+decimal
+codepage cp437
+
+variable current-codepage ' cp437 current-codepage !
+
+: char-to-unicode		( char -- codepoint )
+  current-codepage @ execute
+;
+
+variable basehold
+: .2s base @ basehold ! 2 base ! .s basehold @ base ! ;
+
+: utfbyte ( chr bits -- )
+  dup
+  1 swap lshift 1 -	( chr bits mask )
+  rot and			( bits masked )
+  %10				( bits masked 10 )
+  rot lshift or
+;
+
+\ Encode 16 bit val to utf8 and emit the sequence
+: uemit			( u -- )
+  char-to-unicode
+  2 base !
+  dup $7f <= if
+	emit
+  else
+	>r
+	r@ $7ff <= if
+		( two byte encoding )
+		r@ 6 utfbyte		  ( chr byte2 )
+		r@ 6 rshift 5 utfbyte ( byte2 pbyte1 )
+		%10000000 or		  ( byte2 byte1 )
+		emit emit
+	else
+	  r@ $FFFF <= if
+		( three byte encoding )
+		r@  6 utfbyte
+		r@  6 rshift 6 utfbyte
+		r@ 12 rshift 4 utfbyte
+		%11000000 or
+		emit emit emit
+		else
+			( four byte encoding )
+			r@  6 utfbyte
+			r@  6 rshift 6 utfbyte
+			r@ 12 rshift 6 utfbyte
+			r@ 18 rshift 3 utfbyte
+			%11100000 or
+			emit emit emit emit
+		then
+	 then
+	 r> drop
+  then
+  10 base !
+;
+
+: urepchar ( ucp n -- )
+  dup 0> if
+	0 do
+	  dup uemit
+	loop
+  else
+	drop
+  then
+  drop
+;
+
+: dump-line		( addr n<=16 -- )
+  base @ -rot	( base addr n -- )
+  hex
+
+  ?dup if
+	over		( base addr n addr )
+	16 u.r space			\ Print addr
+
+	dup			( base addr n n )
+	0 ?do		( base addr n )
+	  over i +	( base addr n addr+i )
+	  c@		( base addr n byte )
+	  2 .0r space
+	loop
+
+	\ Print ascii equivalents
+	dup			( base addr n n )
+	3 *		    ( base addr n spc )
+
+	\ Pad to char location
+
+
+	[ 16 3 * ] literal	( base addr n spc bspc )
+	swap -
+	spaces			( base addr n )
+	0 ?do
+	  dup i +		( base addr addr+i )
+	  c@			( base addr byte )
+	  dup 1 >= if
+		uemit
+	  else
+		drop '.' emit
+	  then
+	loop
+  then
+  drop
+  base !
+;
+
+: dump 			( addr len -- )
+  16 /mod				( addr len%16 len/16 -- )
+  swap >r				( addr len/16 -- r: len%16 )
+
+  dup
+  0 ?do
+	over i 16 * +		( len addr daddr )
+	16 dump-line cr		( len addr )
+  loop
+
+  \ Dump a possible partial ending line
+  16 *	+				( addr len )
+  r> 					( len%16 addr-start )
+  dump-line cr
+;
+
+: find-word-protected		( msg n -- )
+  parse-word 2dup find-word	( msg n addr n 0|xt 1|xt -1 )
+  ?dup 0= if
+	." Word <"
+	type
+	." > not found: "
+	type cr
+	abort
+  then		( msg n addr n xt )
+  drop
+  >r
+  2drop
+  2drop
+  r>
+;
+
+: ascii
+  base @
+  decimal
+  ."     0 1 2 3 4 5 6 7 8 9 A B C D E F" cr
+  256 0 do
+	i 16 mod 0= if
+	  cr
+	  hex
+	  i 2 u.r
+	  decimal
+	  ." : "
+	then
+	i uemit space
+  loop
+  cr
+  base !
+;
+
+
+: forget
+  s" forget" find-word-protected
+  cfa>
+  dup	?builtin if
+	drop
+	abort" Can't forget builtin word."
+  then
+  dup @			( prev lfa )
+  get-current !	( Update latest to prev word from forgotten )
+  cp !			( Update here )
+;
+
+( Returns the depth of the dstack in words )
+: depth
+  s0 @ dsp@ -
+  8 -			\ Because S0 was on the stack when we pushed DSP
+  8/
+;
 
 \ *** code / code; and friends
 : ;code

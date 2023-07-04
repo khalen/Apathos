@@ -550,7 +550,7 @@ defcode	UMOD, "umod"
 	push	x0
 	next
 
-defword	UDIVMOD, "u/mod"	// (a b -- a%b a/b)
+defcode	UDIVMOD, "u/mod"	// (a b -- a%b a/b)
 	pop2	x1, x0
 	udiv	x2, x1, x0
 	mul	x3, x2, x0
@@ -820,9 +820,19 @@ defcode	STORE, "!"		// (v addr --) *addr = v
 	str	x1, [x0]
 	next
 
-defcode CSTORE, "c!"		// (v addr --) *(byte *)addr = v & 0xFF
+defcode CSTORE, "c!"		// (v addr --) *(u8 *)addr = v & 0xFF
 	pop2	x1, x0
 	strb	w1, [x0]
+	next
+
+defcode HSTORE, "h!"		// (v addr --) *(u16 *)addr = v & 0xFFFF
+	pop2	x1, x0
+	strh	w1, [x0]
+	next
+
+defcode wSTORE, "w!"		// (v addr --) *(u32 *)addr = v & 0xFFFFFFFF
+	pop2	x1, x0
+	str	w1, [x0]
 	next
 
 defcode PLUSSTORE, "+!"		// (n addr --) *addr += n
@@ -848,6 +858,18 @@ defcode	FETCH, "@"	// (addr -- v) v = *addr
 defcode	CFETCH, "c@"	// (addr -- v) v = *(byte *)addr
 	pop	x0
 	ldrb	w1, [x0]
+	push	x1
+	next
+
+defcode	HFETCH, "h@"	// (addr -- v) v = *(byte *)addr
+	pop	x0
+	ldrh	w1, [x0]
+	push	x1
+	next
+
+defcode	WFETCH, "w@"	// (addr -- v) v = *(byte *)addr
+	pop	x0
+	ldr	w1, [x0]
 	push	x1
 	next
 
@@ -1068,113 +1090,6 @@ defcode FILL, "fill"
 
 3:	next
 
-defcode PWORDASCII, ".wordascii"
-	pop	x16
-	mov	x17, #8
-	mov	x3, #'.'
-	mov	x0, #'/'
-	call	uart_putb
-
-1:	cmp	x17, xzr
-	beq	2f
-
-	mov	x3, #'.'
-	and	x2, x16, #0xFF
-	cmp	x2, #' '
-	csel	x0, x3, x2, lt
-	cmp	x2, #127
-	csel	x0, x3, x0, ge
-	call	uart_putb
-	lsr	x16, x16, #8
-	sub	x17, x17, 1
-	b	1b
-2:	mov	x0, #'/'
-	call	uart_putb
-	next
-
-defcode PWORDBYTES, ".wordbytes"
-	pop	x11
-	mov	x10, #8
-
-1:	cmp	x10, xzr
-	beq	2f
-	ldr	x0, =bword_str
-	and	x1, x11, #0xFF
-	call	printf_
-	lsr	x11, x11, #8
-	sub	x10, x10, 1
-	b	1b
-2:	next
-
-.section .rodata
-bword_str:	.string "%02llX "
-.section .text
-
-defcode PWORD, ".word"
-	pop	x1
-	ldr	x0, =xword_str
-	call	printf_
-	next
-
-.section .rodata
-xword_str:	.string "%016llX "
-.section .text
-
-defcode	DEPTH, "depth"
-	loadvar	x0, S0
-	sub	x0, x0, dsp
-	asr	x0, x0, #3
-	sub	x0, x0, #1
-	push	x0
-	next
-
-defword DOTS, ".s"
-	fw	DSPFETCH
-	fw	DEPTH
-	fw	DUP, ZGEQ
-	fw	ZBRANCH
-	fw	1f - .
-	fw	PMEM
-	fw	EXIT
-1:	fw	LIT, '<', DUP, EMIT, EMIT, CR
-	fw	EXIT
-
-defword DUMPVAL, "dumpval"
-	fw	DUP, PWORD		// ( nc addr )
-	fw	LIT, ':', EMIT
-	fw	LIT, 32, EMIT
-	fw	DUP, FETCH		// ( nc addr @addr )
-	fw	DUP, PWORD		// ( nc addr @addr )
-	fw	DUP, PWORDBYTES		// ( nc addr @addr )
-	fw	PWORDASCII		// ( nc addr )
-	fw	CR
-	fw	EXIT
-
-// ( addr cnt -- )
-defword PMEM, ".mem"
-1:	fw	QDUP			// ( addr cnt|0 cnt? -- )
-	fw	ZBRANCH
-	fw	2f - .
-	fw	DEC			// ( addr (cnt-1) )
-	fw	SWAP			// ( nc addr )
-	fw	DUMPVAL
-	fw	INCX8			// ( nc addr+8 )
-	fw	SWAP			// ( naddr nc )
-	fw	BRANCH
-	fw	1b - .
-
-2:	fw	DROP
-	fw	CR
-	fw	EXIT
-
-pword_str:	.string "%08llx "
-
-defword DD, "dd"
-	fw	EMIT
-	fw	LIT, ':', EMIT
-	fw	CR
-	fw	EXIT
-
 defcode	DSPFETCH, "dsp@"
 	mov	x0, dsp
 	push	x0
@@ -1225,13 +1140,6 @@ defcode ALIGN, "align"
 	loadvar	x0, CP
 	add	x1, x0, #7
 	bic	x2, x1, #7
-	savevar	CP, x2
-	next
-
-defcode ALIGN16, "align16"
-	loadvar	x0, CP
-	add	x1, x0, #15
-	bic	x2, x1, #15
 	savevar	CP, x2
 	next
 
@@ -1324,12 +1232,6 @@ defword KET, "]"
 	fw	STORE
 	fw	EXIT
 
-// Dummy word to allow setting a breakpoint in Fith implemented words - in gdb, "b code_BREAK"
-defcode	BREAK, "brk"
-	pop	x0
-	push	x0
-	next
-
 defcode TTICK, "''"
 	ldr	x1, [fip], #8
 	push	x1
@@ -1389,6 +1291,7 @@ defword COLON, ":"
 	fw	LIT, _DOCOL	// Change the cfa of the word just created to _DOCOL from _DOVAR
 	fw	HERE, BODYFROM
 	fw	STORE
+	fw	TOGGLEHIDELATEST
 	fw	KET
 	fw	EXIT
 
@@ -1396,6 +1299,7 @@ defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	LIT, EXIT
 	fw	COMMA
 	fw	BRA
+	fw	TOGGLEHIDELATEST
 	fw	EXIT
 
 // Given the lfa of a word, move to its name
@@ -1427,24 +1331,6 @@ defcode TOGGLEHIDE, "toggle-hide"
 	add	x0, x0, #8	// Move to name field
 	ldrb	w1, [x0]
 	eor	w1, w1, #F_HIDDEN
-	strb	w1, [x0]
-	next
-
-// Toggle hidden bit on the given dict entry (lfa)
-// ( lfa -- )
-defcode	HIDENAME, "hide-name"
-	pop	x0
-	add	x0, x0, #8	// Move to name field
-	ldrb	w1, [x0]
-	orr	w1, w1, #F_HIDDEN
-	strb	w1, [x0]
-	next
-
-defcode	UNHIDENAME, "unhide-name"
-	pop	x0
-	add	x0, x0, #8	// Move to name field
-	ldrb	w1, [x0]
-	and	w1, w1, #~F_HIDDEN
 	strb	w1, [x0]
 	next
 
@@ -1482,6 +1368,144 @@ defword SLITERAL, "sliteral", F_IMMEDIATE | F_BUILTIN
 	fw	DUP, LITERAL		// addr here u
 	fw	CMOVE
 	fw	EXIT
+
+// ( char -- lchar )
+defcode DOWNCASE, "downcase"
+	pop	x12
+	bl	downcase_impl
+	push	x12
+	next
+
+downcase_impl:
+	cmp	x12, #'A'
+	blo	1f		// Less than A
+
+	cmp	x12, #'Z'	// Greater than Z
+	bhi	1f
+
+	// Convert to lower case
+	sub	x12, x12, #'A'
+	add	x12, x12, #'a'
+
+1:	ret
+
+// ( addr1 u1 addr2 u2 -- 0 | 1 | -1 )
+defcode COMPARE, "compare"
+	pop4	x0, x1, x2, x3
+
+	// Rules:
+	//   Identical strings return 0
+	//   Strings of different length that are identical up to the length of the shorter string
+	//     return -1 if u1 is shorter than u2, otherwise 1
+	//   Strings that differ return -1 if the first differing character from addr1 is < the
+	//     char in addr2, 1 otherwise
+cc_top:	cmp	x1, xzr
+	bne	cc_leftmore
+
+	cmp	x3, xzr
+	bne	cc_rightmore			// Ran out of chrs at the same time
+
+	// If we get here, the strings ran out at the same time so they're equal
+	mov	x6, xzr
+	b	cc_done
+
+cc_rightmore:
+	// Here, 1 was shorter than 2, but the strings were equal to this point. Return -1
+	mov	x6, #-1
+	b	cc_done
+
+cc_leftmore:
+	cmp	x3, xzr
+	bne	cc_comparenext
+
+	// Here, 2 was shorter than 1, but the strings were equal to this point. Return 1
+	mov	x6, #1
+	b	cc_done
+
+cc_comparenext:
+	// Both strings have new characters
+	ldrb	w10, [x0], #1
+	sub	x1, x1, #1
+
+	ldrb	w11, [x2], #1
+	sub	x3, x3, #1
+
+	cmp	x10, x11
+	beq	cc_top			// Equal chars, start again with the next
+
+	blt	cc_firstlt
+
+	// 1st higher, return 1
+	mov	x6, #1
+	b	cc_done
+
+cc_firstlt:
+	mov	x6, #-1
+
+cc_done:
+	push	x6
+	next
+
+// ( addr1 u1 addr2 u2 -- 0 | 1 | -1 )
+defcode CICOMPARE, "cicompare"
+	pop4	x0, x1, x2, x3
+
+	// Rules:
+	//   Identical strings return 0
+	//   Strings of different length that are identical up to the length of the shorter string
+	//     return -1 if u1 is shorter than u2, otherwise 1
+	//   Strings that differ return -1 if the first differing character from addr1 is < the
+	//     char in addr2, 1 otherwise
+ci_top:	cmp	x1, xzr
+	bne	ci_leftmore
+
+	cmp	x3, xzr
+	bne	ci_rightmore			// Ran out of chrs at the same time
+
+	// If we get here, the strings ran out at the same time so they're equal
+	mov	x6, xzr
+	b	ci_done
+
+ci_rightmore:
+	// Here, 1 was shorter than 2, but the strings were equal to this point. Return -1
+	mov	x6, #-1
+	b	ci_done
+
+ci_leftmore:
+	cmp	x3, xzr
+	bne	ci_comparenext
+
+	// Here, 2 was shorter than 1, but the strings were equal to this point. Return 1
+	mov	x6, #1
+	b	ci_done
+
+ci_comparenext:
+	// Both strings have new characters
+	ldrb	w12, [x0], #1
+	bl	downcase_impl
+	mov	x10, x12
+	sub	x1, x1, #1
+
+	ldrb	w12, [x2], #1
+	bl	downcase_impl
+	mov	x11, x12
+	sub	x3, x3, #1
+
+	cmp	x10, x11
+	beq	ci_top			// Equal chars, start again with the next
+
+	blt	ci_firstlt
+
+	// 1st higher, return 1
+	mov	x6, #1
+	b	ci_done
+
+ci_firstlt:
+	mov	x6, #-1
+
+ci_done:
+	push	x6
+	next
 
 // ( addr u -- ) 	Given a FCS, translate any upper case letters to lower case. Note: In place. Note note: Ascii only. Note note note: lame.
 defcode	FSTOLOWER, "fstolower"
@@ -1728,12 +1752,6 @@ defword	REPL, "repl"
 ok_msg:	.ascii "Ok.\n"
 	.equ	ok_msg_len, . - ok_msg
 
-defword NWORD, "@@nword"
-	fw	LIT, 16
-	fw	SUB
-	fw	NTELL
-	fw	EXIT
-
 // **** Outer interpreter
 // Repeat until the buffer is empty:
 //   PARSEWORD - lex single word from input
@@ -1794,6 +1812,7 @@ defword QEXECUTE, "?execute"
 	fw	LIT, noword_msg_len
 	fw	TELL
 	fw	TELL
+	fw	LIT, '>', EMIT
 	fw	CR
 	fw	ABORT
 
@@ -2229,7 +2248,7 @@ defword COLDSTART, "*coldstart"
 cold_start:
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
-	//fw	RUNRC
+	fw	RUNRC
 	fw	REPL
 	fw	EXIT
 
@@ -2405,7 +2424,7 @@ defcode ABORT, "abort"
 	next
 
 test_msg:	.string "This is a printf_ test: %s %ld %c\nShould read: Test 123456 c\n"
-noword_msg:	.ascii "? "
+noword_msg:	.ascii "Unknown word <"
 	        .equ	noword_msg_len, . - noword_msg
 
 defvar	EORO, "*eoro"
