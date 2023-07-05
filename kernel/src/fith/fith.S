@@ -1730,7 +1730,7 @@ defword	SEARCHWORDLIST, "search-wordlist"
 defword	FINDWORD, "find-word"
 	fw	GETCURRENT
 	fw	SEARCHWORDLIST
-	fw	EXIT
+1:	fw	EXIT
 
 word_search_buffer:	.space	256
 word_lower_buffer:	.space	256
@@ -2430,6 +2430,8 @@ avRESET:
 	fw	EXIT
 
 // Built in variables
+defvar ASMVERS, "builtin-version", FITH_VERSION
+
 // STATE - 0 if immediate execution mode, 1 if compilation mode
 defvar	STATE, "state"
 

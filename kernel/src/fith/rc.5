@@ -1,3 +1,7 @@
+here
+create version 1 cells allot
+1 version !
+
 : .( ')' parse type ; IMMEDIATE
 .( Booting from internal rc.5...)
 
@@ -211,7 +215,7 @@
 : 2variable	create 2 cells allot ;
 : wordlist	( -- wid )	here 1 cells allot ;
 
-: constant	variable latest	>cfa >body ! does> @ ;
+:  constant	variable  latest >cfa >body  ! does> @ ;
 : 2constant	2variable latest >cfa >body 2! does> 2@ ;
 
 : value constant ;
@@ -338,9 +342,6 @@ variable	do-sp	 0 do-sp !
 
 : depth
   stack drop - 1 cells / ;
-
-: wordlist \ -- wid
-  here 1 cells allot ;
 
 : count	\ caddr -- addr' ch
   dup 1+ swap c@ ;
@@ -780,6 +781,51 @@ variable basehold
   8 -			\ Because S0 was on the stack when we pushed DSP
   8/
 ;
+(
+: wordlist \ -- wid
+  here 1 cells allot dup 0 ! ;
+
+: set-current ( wid -- )	'q' emit current ! 'r' emit ;
+
+'a' emit
+
+\ *** Environment
+get-current constant	forth-wordlist
+wordlist    constant	environment
+'e' emit
+
+environment set-current
+'b' emit
+
+: /counted-string		255 ;
+: /hold					pic-size ;
+: /pad					pad-size ;
+: address-unit-bits		8
+: core					true ;
+: core-ext				false ;
+: floored				false ;
+: max-char				255 ;
+: max-d					-1 -1 1 rshift ;
+: max-n					$7fffffffffffffff ;
+: max-u					-1 ;
+: max-ud				-1 -1 ;
+: return-stack-cells	rstack nip nip 1 cells / ;
+: stack-cells			stack nip nip 1 cells / ;
+: version				version @ ;
+forth-wordlist	set-current
+
+'d' emit
+
+: environment?	( c-addr u -- false | i*x true )
+  environment search-wordlist if
+	execute
+	true
+  else
+	false
+  then
+;
+)
+\ *** Interpret time if/then
 
 \ *** code / code; and friends
 : ;code
@@ -795,4 +841,10 @@ hide-name (end-code-int)
 hide-name (end-code)
 hide-name (code)
 
+'c' emit
+
 .( Done.) cr
+
+\ Print stats
+here swap -
+dup . .( / ) cells . .( bytes / cells used by startup code.)
