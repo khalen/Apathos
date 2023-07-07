@@ -17,6 +17,8 @@ create version 1 cells allot
 \   of a search word with the name in the dictionary, allowing upper or lower case to
 \   match builtins. This only works if the words themselves are lower case.
 
+: erase 0 fill ;	\ ( caddr u -- )
+
 : '
  \ Can't use IF yet
  parse-word find-word dup 0= ?dup 2drop ;
@@ -424,6 +426,8 @@ variable pic		0 pic !
 ; IMMEDIATE
 
 \ *** Printing numbers
+cr .( Printing... )
+
 ( num -- )
 : u.
   base @ u/mod
@@ -762,7 +766,6 @@ variable basehold
   base !
 ;
 
-
 : forget
   s" forget" find-word-protected
   cfa>
@@ -781,22 +784,172 @@ variable basehold
   8 -			\ Because S0 was on the stack when we pushed DSP
   8/
 ;
+
+\ **** CASE ... OF
+cr .( case ... of...)
+
+: case
+  0			\ marker for bottom of stack
+; IMMEDIATE
+
+: of
+	  postpone over
+	  postpone =
+	  [compile] if
+	  postpone drop
+; IMMEDIATE
+
+: endof
+  [compile] else
+; IMMEDIATE
+
+: endcase
+  postpone drop
+  begin
+	?dup
+  while
+	[compile] then
+  repeat
+; IMMEDIATE
+
+\ **** Exceptions
+cr .( Exceptions...)
+
+variable _handler 0 _handler !
+
+: catch		( xt -- exn? )
+  dsp@ >r
+  _handler @ >r		\ Save dsp and prev handler
+  rsp@ _handler !	\ Addr of return addr
+  execute			\ Execute returns if no throw
+  r> _handler !		\ Restore prev handler
+  r> drop			\ Discard saved SP
+  0					\ Flag "no throw"
+;
+
+: throw		( n -- )
+  ?dup if
+	_handler @
+	?dup if
+		rsp!	\ Restore prev return stack
+		r> _handler !	\ Restore prev handler
+		r> swap >r		\ Exc# on return stack
+		dsp! drop r>	\ restore stack
+		\ Return to the caller of CATCH because return stack is restored to the state
+		\ when catch executed
+	else
+	  \ No handler, uncaught exception
+	  dup -1 = if
+		." Uncaught abort" cr
+		abort		\ Call 1st abort implemented
+	  else
+		." Uncaught exception " . cr
+	  then
+	then
+  then
+;
+
+\ Redefine abort in terms of throw; note that we also have to redefine abort"
+\ since it references the old abort.
+: abort
+  -1 throw
+;
+
+\ 0= if <perror> then ...
+: abort"
+  postpone 0branch
+  here
+  0 ,
+  [compile] s"
+  postpone type
+  postpone cr
+  postpone abort
+  here
+  over -
+  swap !
+; IMMEDIATE
+
 (
+\ Test exceptions
+: _foo-throw throw ;
+
+: _test-exceptions
+  25 ['] _foo-throw catch
+  ?dup if
+	cr ." Called _foo-throw and it threw exception number: " . cr
+	drop	\ The argument of foo
+  then
+  0 ['] _foo-throw catch
+  ?dup 0= if
+	cr ." Called _foo-throw and it didn't throw, as exepcted." cr
+  then
+
+  1 _foo-throw
+;
+
+cr .( test-exceptions... )
+_test-exceptions
+)
+
+\ **** Search Order / word / find / find-name / etc
+cr .( Search order... )
+
 : wordlist \ -- wid
-  here 1 cells allot dup 0 ! ;
+  here 1 cells allot dup 0 swap !
+;
 
-: set-current ( wid -- )	'q' emit current ! 'r' emit ;
+: set-current ( wid -- )	current ! ;
 
-'a' emit
-
-\ *** Environment
 get-current constant	forth-wordlist
 wordlist    constant	environment
-'e' emit
 
+8 constant search-order-max
+create search-context	search-order-max cells allot
+
+variable #search-context	0 #search-context !
+
+get-current constant forth-wordlist
+
+: default-context	( -- forth-wordlist ... widn n )
+  forth-wordlist
+  1
+;
+
+: get-order	( -- widl ... widl n )
+  #search-context @ 0 ?do
+	#search-context @ i - 1- cells search-context + @
+  loop
+  #search-context @
+;
+
+: set-order ( widl ... widn n | -1 )
+  dup -1 = if
+	\ Push default wordlists
+	drop
+	default-context
+  then
+
+  dup #search-context !
+  0 ?do i 1 - cells search-context + ! loop
+;
+
+\ Initialize to default-context
+-1 set-order
+
+\ Enough space to hold a max length counted string
+create _word-buf 257 allot align
+
+: word ( char -- c-addr )	\ Parse word delimited by char.
+  _word-buf
+  dup
+  rot
+  parse
+  $toscs
+;
+
+
+(
 environment set-current
-'b' emit
-
 : /counted-string		255 ;
 : /hold					pic-size ;
 : /pad					pad-size ;
@@ -814,6 +967,8 @@ environment set-current
 : version				version @ ;
 forth-wordlist	set-current
 
+
+
 'd' emit
 
 : environment?	( c-addr u -- false | i*x true )
@@ -825,6 +980,7 @@ forth-wordlist	set-current
   then
 ;
 )
+
 \ *** Interpret time if/then
 
 \ *** code / code; and friends
@@ -847,4 +1003,4 @@ hide-name (code)
 
 \ Print stats
 here swap -
-dup . .( / ) cells . .( bytes / cells used by startup code.)
+dup . .( / ) 8 / . .( bytes / cells used by startup code.) cr

@@ -23,6 +23,7 @@
 #define DEFAULT_DSTACK_SIZE		4096
 #define DEFAULT_RSTACK_SIZE		1024
 #define DEFAULT_DICT_SIZE		1024*1024
+#define CONTEXT_SIZE			8		/* # dicts supported in search order */
 
 // Important system registers
 dsp	.req	x19	// Fith data stack
@@ -1286,7 +1287,6 @@ defword	CREATE, "create"
 
 defword COLON, ":"
 	fw	CREATE
-	fw	LIT, 0, PROMPTENABLED, STORE
 	fw	LIT, _DOCOL	// Change the cfa of the word just created to _DOCOL from _DOVAR
 	fw	HERE, BODYFROM
 	fw	STORE
@@ -1299,7 +1299,6 @@ defword	SEMIC, ";", F_IMMEDIATE | F_BUILTIN
 	fw	COMMA
 	fw	BRA
 	fw	TOGGLEHIDELATEST
-	fw	LIT, 1, PROMPTENABLED, STORE
 	fw	EXIT
 
 // Given the lfa of a word, move to its name
@@ -1548,7 +1547,7 @@ stolower_impl:
 // To short counted string, also zeros to next word boundary making it compatible with our name field tests
 // in word matching.
 // ( caddr caddr u -- ) Takes dest, src, len -- makes a short counted string at dest
-defcode	TOSCS, "#toscs"
+defcode	TOSCS, "$toscs"
 	pop3	x0, x1, x2
 	call	toscs_impl
 	next
@@ -1740,7 +1739,8 @@ defword	REPL, "repl"
 	fw	ZBRANCH
 	fw	1b - .
 	fw	INTERPRETLINE
-	fw	PROMPTENABLED, FETCH
+	fw	STATE, FETCH
+	fw	LIT, 1, SUB
 	fw	ZBRANCH
 	fw	1b - .
 	fw	LIT, ok_msg
@@ -2312,8 +2312,9 @@ defcode	REFILL, "refill"
 
 	ldr	x0, =default_input_buffer
 	ldr	x1, =default_input_buffer_len
-	loadvar	x2, PROMPTENABLED
-
+	loadvar	x2, STATE
+	mov	x3, #1
+	sub	x2, x3, x2
 	call	kernel_readline
 
 	savevar	NUMIB, x0
@@ -2423,7 +2424,6 @@ reset_vector:	.quad	0
 // **** End of read-only dictionary section ****
 
 // Technically, everything above (except variables) can be in ROM since it is all static Fith dictionary words.
-
 defword	VRESET, "vreset"
 avRESET:
 	fw	COLDSTART
