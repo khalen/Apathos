@@ -607,12 +607,18 @@ defcode	XOR, "xor"
 	push	x0
 	next
 
+defcode	ABS, "abs"
+	pop	x0
+	bfi	x0, xzr, #63, #1		// Clear top bit
+	push	x0
+
 // *** Double words
 // ( d n -- n1 n2 ) 128 bit narrowing divide - d = hi lo   n = divisor  n1 = remain n2 = quot
 defcode UMDIVMOD, "um/mod"
 	pop3	x1, x0, x2
-	bl	umdivmod_impl
+	call	umdivmod_impl
 	push2	x8, x0
+	next
 
 umdivmod_impl:
 	// arm64 does not have a 128b narrowing divide like amd64.
@@ -679,10 +685,11 @@ defcode SMREM, "sm/rem"
 	and	x0, x0, x10
 	and	x2, x2, x10
 
-	bl	umdivmod_impl
+	call	umdivmod_impl
 	orr	x0, x0, x10
 
 	push2	x8, x0
+	next
 
 // ( d1 d2 -- d3 )  Each double is lo hi on the stack so eg x1 = hi part of 1st d
 defcode DADD, "d+"
@@ -1187,6 +1194,26 @@ defcode BODYFROM, "body>"
 	push	x0
 	next
 
+defcode XTTONT, "xt>nt"
+	pop	x0
+	sub	x0, x0, #16
+	push	x0
+	next
+
+defword NAMETOCOMPILE, "name>compile"
+	fw	LIT, 16, ADD
+	fw	EXIT
+
+defword NAMETOINTERPRET, "name>interpret"
+	fw	LIT, 16, ADD
+	fw	EXIT
+
+// ( nt -- caddr u )
+defword	NAMETOSTRING, "name>string"
+	fw	DUP, CFETCH, LIT, F_LEN_MASK, AND
+	fw	SWAP, INC, SWAP
+	fw	EXIT
+
 // *** Compilation misc.
 defcode	CELLS, "cells"
 	pop	x1
@@ -1281,6 +1308,7 @@ defword STARCREATE, "*create"
 	fw	EXIT
 
 defword	CREATE, "create"
+	fw	ALIGN
 	fw	PARSEWORD
 	fw	STARCREATE
 	fw	EXIT
@@ -1619,7 +1647,11 @@ matchxt_impl:
 	csel	x10, x2, x1, ne
 	and	x9, x9, #0x1f
 
-#if 0
+#if 1
+	loadvar	x15, VERBOSE
+	cmp	x15, xzr
+	beq	6f
+
 	// Print test : dict
 	mov	scx3, x0
 	mov	scx4, x1
@@ -1648,7 +1680,7 @@ matchxt_impl:
 #endif
 
 	// Fetch first comparison words - will be at the word after the lfa
-	ldr	x3, [x10]
+6:	ldr	x3, [x10]
 	ldr	x4, [x0, #8]
 
 	// Mask flags from the first comparison word (because we're little endian, this is actually in the low byte
@@ -1676,7 +1708,7 @@ matchxt_matched:
 	tst	x12, #F_IMMEDIATE
 	csel	x3, scx1, scx0, ne
 
-3:	add	x0, x0, #24		// Move to the cfa of this word
+3:	add	x0, x0, #24		// Move to the nt of this word
 
 	push3	x2, x1, x0
 	push	x3
@@ -1726,10 +1758,15 @@ defword	SEARCHWORDLIST, "search-wordlist"
 	fw	EXIT
 
 // ( caddr uu -- 0 | xt 1 | xt -1 )
-defword	FINDWORD, "find-word"
+defword	FINDWORDCURRENT, "find-word-cur"
 	fw	GETCURRENT
 	fw	SEARCHWORDLIST
 1:	fw	EXIT
+
+defword FINDWORD, "find-word"
+	fw	FINDWORDVEC, FETCH
+	fw	EXECUTE
+	fw	EXIT
 
 word_search_buffer:	.space	256
 word_lower_buffer:	.space	256
@@ -2251,7 +2288,7 @@ defword COLDSTART, "*coldstart"
 cold_start:
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
-	fw	RUNRC
+	// fw	RUNRC
 	fw	REPL
 	fw	EXIT
 
@@ -2432,6 +2469,8 @@ avRESET:
 // Built in variables
 defvar ASMVERS, "builtin-version", FITH_VERSION
 
+defvar	VERBOSE, "verbose-match", 0
+
 // STATE - 0 if immediate execution mode, 1 if compilation mode
 defvar	STATE, "state"
 
@@ -2452,10 +2491,10 @@ defvar BASE, "base", 10
 
 defvar	DEFFLAG, "default-flag", 0
 
-defvar	PROMPTENABLED, "prompt-enabled", 1
+// Vector for things we want to be easily replaceable in the RC.
+defvar FINDWORDVEC, "find-word-vec", FINDWORDCURRENT
 
 defvar CURRENT, "current", var_THEWL
-
 defvar THEWL, "thewl", name_THEWL
 
 .data
@@ -2506,9 +2545,6 @@ reset:
 
 	mov	x0, #10
 	savevar	BASE, x0
-
-	mov	x0, #1
-	savevar PROMPTENABLED, x0
 
 	ldr	fip, =avRESET
 	next				// Next will start the interpreter with cold_start as the first word

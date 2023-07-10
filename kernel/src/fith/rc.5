@@ -7,7 +7,9 @@ create version 1 cells allot
 
 : \ 10 parse 2drop ; IMMEDIATE
 \ Now we have backslash comments!
-\
+
+: ( ')' parse 2drop ; IMMEDIATE
+
 \ The ordering of early words in this boot file has the goal of supporting nested paren
 \   comments as early as possible in the process, then defining only the words needed
 \   to implement POSTPONE so we can use it for the rest of the control flow etc.
@@ -22,6 +24,15 @@ create version 1 cells allot
 : '
  \ Can't use IF yet
  parse-word find-word dup 0= ?dup 2drop ;
+
+\ Newline is ASCII 10
+: '\n' 10 ;
+
+\ ' ' is ascii 32
+: bl 32 ;
+
+\ SPACE prints a space
+: space bl emit ;
 
 \ We really only need this until we have postpone, but it makes defining early control
 \ flow words easier. This only works because we're a traditional explicit return stack
@@ -68,6 +79,73 @@ create version 1 cells allot
 	swap !
 ; IMMEDIATE
 
+\ ** Looping constructs
+: begin
+  here			\ Remember loop start
+; IMMEDIATE
+
+: until
+  *compile 0branch
+  here -
+  ,
+; IMMEDIATE
+
+: while
+  *compile 0branch
+  here			\ Remember where we are, compile branch dummy
+  0 ,
+; IMMEDIATE
+
+: repeat		\ ( bloc wloc -- )
+  swap			\ ( wloc bloc )
+  *compile branch
+  here -		\ ( wloc offset )
+  ,				\ ( wloc )
+  here			\ ( wloc here )
+  over -		\ ( wloc offset )
+  swap !
+; IMMEDIATE
+
+\ RECURSE makes a recursive call to the word that's currently being compiled.
+\   Get the latest word created, move to its cfa, and compile that
+: recurse
+  latest >cfa compile, ; IMMEDIATE
+
+( num -- )
+: u.
+  base @ u/mod
+  ?dup if
+	recurse
+  then
+
+  dup 10 < if
+	'0'
+  else
+	10 -
+	'A'
+  then
+  +
+  emit
+;
+
+: . u. space ;
+
+\ Non destructively print the stack
+: .s
+  dsp@
+  begin
+	dup s0 @ <
+  while
+	dup @ u.
+	space
+	8+
+  repeat
+  cr
+  drop
+;
+
+: wp.s   base @ >r 16 base ! emit space .s cr r> base ! ;
+
   \ -- addr u
 : s"
   '"' parse
@@ -94,7 +172,7 @@ create version 1 cells allot
 
 \ POSTPONE compiles a call to the following word, whether it is an immediate word or not.
 : postpone
-  parse-word 2dup find-word		\ ( -- addr u 0 | xt 1 | xt -1 )
+  parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
   ?dup 0= if
 	type ' ' emit true abort"  postpone?"
   then
@@ -109,33 +187,6 @@ create version 1 cells allot
 	['] compile, compile,
   then
   2drop
-; IMMEDIATE
-
-\ ** Looping constructs
-: begin
-  here			\ Remember loop start
-; IMMEDIATE
-
-: until
-  postpone 0branch
-  here -
-  ,
-; IMMEDIATE
-
-: while
-  postpone 0branch
-  here			\ Remember where we are, compile branch dummy
-  0 ,
-; IMMEDIATE
-
-: repeat		\ ( bloc wloc -- )
-  swap			\ ( wloc bloc )
-  postpone branch
-  here -		\ ( wloc offset )
-  ,				\ ( wloc )
-  here			\ ( wloc here )
-  over -		\ ( wloc offset )
-  swap !
 ; IMMEDIATE
 
 \ NOT (boolean)
@@ -325,139 +376,8 @@ variable	do-sp	 0 do-sp !
 
 \ ****Misc math and convenience
 
-\ RECURSE makes a recursive call to the word that's currently being compiled.
-\   Get the latest word created, move to its cfa, and compile that
-: recurse
-  latest >cfa compile, ; IMMEDIATE
-
 : decimal 10 base ! ;
 : hex     16 base ! ;
-
-: d0= ( xd -- flag )	or 0= ;
-: s>d ( n -- d )		dup 0< ;
-
-: */mod  ( n1 n2 n3 -- rem quot )	>r m* r> sm/rem ;
-: */     ( n1 n2 n3 -- quot )		*/mod nip ;
-
-: signum	\ x -- -1/0/1
-	dup 0< swap 0> - ;
-
-: depth
-  stack drop - 1 cells / ;
-
-: count	\ caddr -- addr' ch
-  dup 1+ swap c@ ;
-
-: /string		\ ( addr u n -- addr' u' )
-  tuck -
-  >r + r>
-;
-
-: find			\ caddr -- caddr 0|xt 1|xt -1
-  >r r@ count	\ ( addr u )
-  find-word		\ ( 0 | xt 1 | xt -1 )
-  dup 0= if
-	r> swap		\ ( caddr 0 )
-  else
-	r> drop		\ ( xt 1|xt -1 )
-  then
-;
-
-: word \ char "<chars>ccc<char>" -- caddr
-  dup dup 1+ skip			\ Skip leading delimiter(s)
-  dup 1+ swap parse-token	\ Grab word ( low hi -- addr u )
-  >r here 1+ r@ cmove		\ Word will be copied to here+1 .. here+(len+1), 1st byte reserved for count
-  r> here c!				\ Store count
-  here
-;
-
-\ *** Printing
-
-: char+		( addr -- addr' )	1+ ;
-: chars		( m -- n )	;
-
-\ PAD
-256 constant pad-size
-here pad-size allot value pad
-
-\ PIC
-300 aligned constant pic-size
-
-here pic-size allot pic-size +
-value pic-end
-
-variable pic		0 pic !
-
-\ Newline is ASCII 10
-: '\n' 10 ;
-
-\ ' ' is ascii 32
-: bl	32 ;
-
-\ SPACE prints a space
-: space bl emit ;
-: repchar	( char n -- )
-  dup 0>	( char n flag )
-  if
-	0 do	( char )
-		dup emit
-	loop
-  else
-	drop
-  then
-  drop
-;
-
-: zeroes	( n -- )
-  '0' swap repchar
-;
-
-: spaces	( n -- )
-  bl swap repchar
-;
-
-: ."
-  postpone s"
-  state @ if
-	postpone type
-  else
-	type
-  then
-; IMMEDIATE
-
-\ *** Printing numbers
-cr .( Printing... )
-
-( num -- )
-: u.
-  base @ u/mod
-  ?dup if
-	recurse
-  then
-
-  dup 10 < if
-	'0'
-  else
-	10 -
-	'A'
-  then
-  +
-  emit
-;
-
-\ Non destructively print the stack
-: .s
-  dsp@
-  begin
-	dup s0 @ <
-  while
-	dup @ u.
-	space
-	8+
-  repeat
-  cr
-  drop
-;
 
 \ Return the width in characters of an unsigned number in the current base
 \ ( u -- width )
@@ -518,6 +438,26 @@ cr .( Printing... )
   u.
 ;
 
+: repchar	( char n -- )
+  dup 0>	( char n flag )
+  if
+	0 do	( char )
+		dup emit
+	loop
+  else
+	drop
+  then
+  drop
+;
+
+: zeroes	( n -- )
+  '0' swap repchar
+;
+
+: spaces	( n -- )
+  bl swap repchar
+;
+
 : .r
   ['] spaces
   x.r ;
@@ -533,6 +473,104 @@ cr .( Printing... )
 : u. u. space ;
 
 : ? ( addr -- ) @ . ;
+
+: d0= ( xd -- flag )	or 0= ;
+: s>d ( n -- d )		dup 0< ;
+
+: */mod  ( n1 n2 n3 -- rem quot )	>r m* r> sm/rem ;
+: */     ( n1 n2 n3 -- quot )		*/mod nip ;
+
+: signum	\ x -- -1/0/1
+	dup 0< swap 0> - ;
+
+: depth
+  stack drop - 1 cells / ;
+
+: count	\ caddr -- addr' ch
+  dup 1+ swap c@ ;
+
+: /string		\ ( addr u n -- addr' u' )
+  tuck -
+  >r + r>
+;
+
+\ *** Printing
+
+: char+		( addr -- addr' )	1+ ;
+: chars		( m -- n )	;
+
+\ PAD
+256 constant pad-size
+here pad-size allot value pad
+
+: ."
+  postpone s"
+  state @ if
+	postpone type
+  else
+	type
+  then
+; IMMEDIATE
+
+\ **** Exceptions
+cr .( Exceptions...)
+
+variable _handler 0 _handler !
+
+: catch		( xt -- exn? )
+  dsp@ >r
+  _handler @ >r		\ Save dsp and prev handler
+  rsp@ _handler !	\ Addr of return addr
+  execute			\ Execute returns if no throw
+  r> _handler !		\ Restore prev handler
+  r> drop			\ Discard saved SP
+  0					\ Flag "no throw"
+;
+
+: throw		( n -- )
+  ?dup if
+	_handler @
+	?dup if
+		rsp!	\ Restore prev return stack
+		r> _handler !	\ Restore prev handler
+		r> swap >r		\ Exc# on return stack
+		dsp! drop r>	\ restore stack
+		\ Return to the caller of CATCH because return stack is restored to the state
+		\ when catch executed
+	else
+	  \ No handler, uncaught exception
+	  dup -1 = if
+		." Uncaught abort" cr
+		abort		\ Call 1st abort implemented
+	  else
+		." Uncaught exception" cr
+	  then
+	then
+  then
+;
+
+\ Redefine abort in terms of throw; note that we also have to redefine abort"
+\ since it references the old abort.
+: abort
+  -1 throw
+;
+
+\ 0= if <perror> then ...
+: abort"
+  postpone 0branch
+  here
+  0 ,
+  [compile] s"
+  postpone type
+  postpone cr
+  postpone abort
+  here
+  over -
+  swap !
+; IMMEDIATE
+
+\ *** Printing numbers
+cr .( Printing... )
 
 : cells+ ( x n -- x+n cells )	cells + ;
 
@@ -677,6 +715,119 @@ variable basehold
   drop
 ;
 
+\ ** Pictured output
+
+\ PIC
+300 aligned constant pic-size
+
+here pic-size allot pic-size +
+value picend
+variable pic		0 pic !
+variable inpic		false inpic !
+
+\ Double to double division - used by pictured output
+: uml/mod
+  dup >r
+  0 swap um/mod
+  r> swap >r
+  um/mod
+  r>
+;
+
+: ?in-pic	( -- ) \ Throw if not in pictured output
+  inpic @ 0= if
+	." Pictured output word used outside <# #>"
+	-21 throw
+  then
+;
+
+: hold			( ch -- )
+  ?in-pic
+  pic @			(  )
+  1-
+  tuck
+  c!
+  pic !
+;
+
+: <#	( -- )
+  picend pic !
+  1 inpic +!
+;
+
+: digit 	( n -- char )	\ Convert a num to a digit (incorrect for values > 36)
+  9 over > if		\ 0 -> 48   10 -> 65
+	7 +
+  then
+  '0' +
+;
+
+: ldigit 	( n -- char )	\ Convert a num to a digit (incorrect for values > 36)
+  9 over > if		\ 0 -> 48   10 -> 97
+	39 +
+  then
+  '0' +
+;
+
+: #			( ud -- ud' )
+  ?in-pic
+  base @
+  uml/mod
+  rot
+  digit hold
+;
+
+: #s		( ud -- 0 )
+  ?in-pic
+  begin
+	#
+	2dup
+	d0=
+  until
+;
+
+: sign		( n -- )
+  ?in-pic
+  0< if
+	'-' hold
+  then
+;
+
+: #>
+  ?in-pic
+  2drop
+  pic @
+  picend
+  over -
+;
+
+: .sign			( n du -- )
+  <#
+  bl hold
+  #s
+  rot sign
+  #>
+  type
+;
+
+: u.
+  0 tuck
+  .sign
+;
+
+(
+: .
+  dup abs 0
+  .sign
+;
+)
+
+
+: d.			( d -- )
+  tuck dabs
+  .sign
+;
+
 : dump-line		( addr n<=16 -- )
   base @ -rot	( base addr n -- )
   hex
@@ -812,63 +963,6 @@ cr .( case ... of...)
   repeat
 ; IMMEDIATE
 
-\ **** Exceptions
-cr .( Exceptions...)
-
-variable _handler 0 _handler !
-
-: catch		( xt -- exn? )
-  dsp@ >r
-  _handler @ >r		\ Save dsp and prev handler
-  rsp@ _handler !	\ Addr of return addr
-  execute			\ Execute returns if no throw
-  r> _handler !		\ Restore prev handler
-  r> drop			\ Discard saved SP
-  0					\ Flag "no throw"
-;
-
-: throw		( n -- )
-  ?dup if
-	_handler @
-	?dup if
-		rsp!	\ Restore prev return stack
-		r> _handler !	\ Restore prev handler
-		r> swap >r		\ Exc# on return stack
-		dsp! drop r>	\ restore stack
-		\ Return to the caller of CATCH because return stack is restored to the state
-		\ when catch executed
-	else
-	  \ No handler, uncaught exception
-	  dup -1 = if
-		." Uncaught abort" cr
-		abort		\ Call 1st abort implemented
-	  else
-		." Uncaught exception " . cr
-	  then
-	then
-  then
-;
-
-\ Redefine abort in terms of throw; note that we also have to redefine abort"
-\ since it references the old abort.
-: abort
-  -1 throw
-;
-
-\ 0= if <perror> then ...
-: abort"
-  postpone 0branch
-  here
-  0 ,
-  [compile] s"
-  postpone type
-  postpone cr
-  postpone abort
-  here
-  over -
-  swap !
-; IMMEDIATE
-
 (
 \ Test exceptions
 : _foo-throw throw ;
@@ -903,9 +997,8 @@ cr .( Search order... )
 get-current constant	forth-wordlist
 wordlist    constant	environment
 
-8 constant search-order-max
-create search-context	search-order-max cells allot
-
+8 constant max-orders
+create search-context max-orders cells allot
 variable #search-context	0 #search-context !
 
 get-current constant forth-wordlist
@@ -922,6 +1015,7 @@ get-current constant forth-wordlist
   #search-context @
 ;
 
+decimal
 : set-order ( widl ... widn n | -1 )
   dup -1 = if
 	\ Push default wordlists
@@ -930,11 +1024,109 @@ get-current constant forth-wordlist
   then
 
   dup #search-context !
-  0 ?do i 1 - cells search-context + ! loop
+  0 ?do i cells search-context + ! loop
 ;
 
 \ Initialize to default-context
 -1 set-order
+
+\ Given a nt (lfa in our case), return the string name of the word represented
+\ by that dict entry.
+: name>string		( nt -- caddr u )
+  cell+
+  c@ f_len_mask and
+  swap 1+ swap
+;
+
+\ *** Search order compliant find-name / find
+
+: word \ char "<chars>ccc<char>" -- caddr
+  dup dup 1+ skip			\ Skip leading delimiter(s)
+  dup 1+ swap parse-token	\ Grab word ( low hi -- addr u )
+  >r here 1+ r@ cmove		\ Word will be copied to here+1 .. here+(len+1), 1st byte reserved for count
+  r> here c!				\ Store count
+  here
+;
+
+create _wordbuf_1	64	allot	_wordbuf_1 64 erase
+create _wordbuf_2	64	allot	_wordbuf_2 64 erase
+
+: setup-wordbufs	( addr u -- )	\ wb 1 has default case, wb 2 has downcased words
+  2dup				( addr u addr u )
+  _wordbuf_1 -rot	( addr u dst addr u )
+  $toscs
+  _wordbuf_2 -rot	( dst addr u )
+  $toscs
+  _wordbuf_2 stolower
+;
+
+: $find-name-in			( wid -- nt | 0 )	\ Assumes wordbuf 1 and 2 are set up
+  >r
+ _wordbuf_2 _wordbuf_1	( lowered normal )
+  ['] matchxt			( lowered normal xt )
+  r>					( lowered normal xt wid )
+  exec-wordlist			( lowered normal 0 | xt 1 | xt -1 )
+  ?dup if
+	2swap 2drop
+	swap xt>nt swap
+  else
+	2drop drop
+	0
+  then
+;
+
+: find-name-in			( caddr u wid )
+  -rot setup-wordbufs
+  $find-name-in
+;
+
+: find-name			( c-addr u -- nt 1 | nt -1 | 0 )
+  setup-wordbufs	( -- )
+  get-order			( widn ... widi n )
+  0 swap			( widn ... widi 0 n )
+  0 ?do				( widn...widi 0 )
+	dup 0= if
+	  drop $find-name-in
+	else
+	  nip
+	then
+  loop
+;
+
+: find-xt
+  find-name		( nt -1 | nt 1 | 0 )
+  dup 0<> if
+	swap
+	name>compile
+	swap
+  then
+;
+
+\ Swap everything over to use the dictionary find-word
+' find-xt find-word-vec !
+
+: find			( caddr -- caddr 0 | xt )
+  dup >r
+  count find-name
+  ?dup if
+	state @ if
+	  name>compile
+	else
+	  name>interpret
+	then
+  else
+	r@ 0
+  then
+  r> drop
+;
+
+: discard	( x1 .. xn u -- ) \ Drop u+1 stack items
+  0 ?do drop loop
+;
+
+: definitions	( -- )
+  get-order swap set-current discard
+;
 
 \ Enough space to hold a max length counted string
 create _word-buf 257 allot align
@@ -947,13 +1139,13 @@ create _word-buf 257 allot align
   $toscs
 ;
 
+cr .( Environment... )
 
-(
 environment set-current
 : /counted-string		255 ;
 : /hold					pic-size ;
 : /pad					pad-size ;
-: address-unit-bits		8
+: address-unit-bits		8 ;
 : core					true ;
 : core-ext				false ;
 : floored				false ;
@@ -967,10 +1159,6 @@ environment set-current
 : version				version @ ;
 forth-wordlist	set-current
 
-
-
-'d' emit
-
 : environment?	( c-addr u -- false | i*x true )
   environment search-wordlist if
 	execute
@@ -979,7 +1167,6 @@ forth-wordlist	set-current
 	false
   then
 ;
-)
 
 \ *** Interpret time if/then
 
@@ -996,8 +1183,6 @@ forth-wordlist	set-current
 hide-name (end-code-int)
 hide-name (end-code)
 hide-name (code)
-
-'c' emit
 
 .( Done.) cr
 
