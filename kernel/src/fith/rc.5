@@ -11,6 +11,9 @@ create version 1 cells allot
 create is-compiling-rc 1 cells allot
 1 is-compiling-rc !
 
+create run-tests 1 cells allot
+0 run-tests !
+
 : .( ')' parse type ; IMMEDIATE
 .( Booting from internal rc.5...)
 
@@ -1105,7 +1108,6 @@ cr .( case ... of...)
   repeat
 ; IMMEDIATE
 
-(
 \ Test exceptions
 : _foo-throw throw ;
 
@@ -1123,9 +1125,15 @@ cr .( case ... of...)
   1 _foo-throw
 ;
 
-cr .( test-exceptions... )
-_test-exceptions
-)
+: maybe-test-exceptions
+	\ Don't have conditional compilation yet
+	run-tests @ if
+		cr .( test-exceptions... )
+		_test-exceptions
+	then
+;
+
+' maybe-test-exceptions catch drop
 
 \ **** Search Order / word / find / find-name / etc
 cr .( Search order... )
@@ -1506,8 +1514,8 @@ public-defs
   '}'eval
 ;
 
-1 [if]		\ Examples
-.( Examples) cr
+run-tests @ [if]		\ Tests
+cr .( Namespaced struct tests...)
 struct: person{
 2 cells +field name
 1 chars +field gender aligned
@@ -1656,7 +1664,7 @@ cr
 	state !
 ; IMMEDIATE
 
-0 [if]
+run-tests @ [if]
 : twrd dup ?dup if id. false else true then ;
 
 : test-lambda-word
@@ -1805,7 +1813,7 @@ variable old-find-hook
 ;
 
 \ Execute or compile a word in the provided module
-: do-module-find ( caddr u -- xt|0 )
+: do-module-find ( caddr u -- xt -1|xt 1|0 )
 	2dup find-path-sep dup -1 <>  if										( caddr u u' )
 		2 pick																						( caddr u u' caddr )
 		over																							( caddr u u' caddr u' )
@@ -1818,8 +1826,8 @@ variable old-find-hook
 			>r get-order r>
 			execute
 			1 set-order
-			2r> find-name			?drop
-			>r set-order r>
+			2r> find-word
+			2>r set-order 2r>
 		else
 			2drop drop 0
 		then
@@ -1833,15 +1841,29 @@ variable old-find-hook
 	constant-with-name
 ;
 
+
 public-defs
 
 \ Start a module definition
 : begin-module ( "name" -- )
 	parse-word dup 0<> averts x-tok-expected
-	2dup find-name ?dup if
+	2dup find-word
+	?dup if
 		['] x-defined execute -20 throw
 	else
-		wordlist dup >r -rot constant-with-nt r>
+		wordlist dup >r -rot constant-with-name r>
+	then
+	dup push-stack
+	add
+;
+
+: continue-module ( "name" -- )
+	parse-word dup 0<> averts x-tok-expected
+	2dup find-word
+	?dup if
+		drop nip nip execute
+	else
+		['] x-undefined execute -20 throw
 	then
 	dup push-stack
 	add
@@ -1879,11 +1901,13 @@ find-word-vec @ old-find-hook !
 ' do-module-find find-word-vec !
 .( Done.) cr
 
-.( Module testing...) cr
+run-tests @ [if]
+.( Module testing... Should be four Hellos and a Hello again) cr
 begin-module modtest1
 	10 constant tenconst
 	20 constant twentyconst
-	: printhi ." Hello modular world!" cr
+	: printhi ." Hello modular world!" cr ;
+	printhi
 end-module
 
 modtest1::printhi
@@ -1893,15 +1917,15 @@ printhi
 modtest1 unimport
 
 continue-module modtest1
-	: printhi1 printhi ." Hello again from modular world!" cr
+	: printhi1 printhi ." Hello again from modular world!" cr ;
 end-module
 
 modtest1::printhi1
 
-[defined] printhi [if] .( printhi defined) cr [else] .( printhi undefined) [then]
+[defined] printhi [if] .( printhi defined) cr [else] .( printhi undefined) cr [then]
+[then]
 
 \ *** code / code; and friends
-\ *** o
 .( Code, end-code...) cr
 
 : ;code
