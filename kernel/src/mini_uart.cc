@@ -6,8 +6,10 @@
 #include "peripherals/aux.h"
 #include "peripherals/gpio.h"
 
+#ifdef __cplusplus
 extern "C"
 {
+#endif
 
 #define IO_QUEUE_SIZE 128
 #define IO_QUEUE_MASK (IO_QUEUE_SIZE - 1)
@@ -193,4 +195,7 @@ u64 uart_read(void *inBuf, u64 len)
 
     return len;
 }
+
+#ifdef __cplusplus
 }
+#endif

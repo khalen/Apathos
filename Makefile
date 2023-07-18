@@ -21,7 +21,7 @@ $(ALL_DIRS) :
 
 clean :
 	@rm -rf $(IMG_DIR)/*
-	@rm -rf $(BIN_DIR)/*
+	@rm $(BIN_DIR)/conman
 
 DEPLOY_FILES  = $(wildcard $(FIRMWARE_DIR)/*.*) $(DEPLOY_KERNEL)/config.txt $(IMG_DIR)/armstub8.img
 KERNEL_IMG	  = $(IMG_DIR)/$(DEPLOY_KERNEL)8.img

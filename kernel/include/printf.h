@@ -32,6 +32,7 @@
 #ifndef _PRINTF_H_
 #define _PRINTF_H_
 
+#include "base_defs.h"
 #include <stdarg.h>
 
 
@@ -39,9 +40,9 @@
 extern "C" {
 #endif
 
-typedef unsigned long long size_t;
-typedef long long ssize_t;
-typedef long long ptrdiff_t;
+#include "base_defs.h"
+
+typedef  ssize_t ptrdiff_t;
 
 /**
  * Output a character to a custom device like UART, used by the printf() function

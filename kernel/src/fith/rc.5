@@ -1,12 +1,18 @@
 here
-create version 1 cells allot
-1 version !
-
-: .( ')' parse type ; IMMEDIATE
-.( Booting from internal rc.5...)
+get-ticks
 
 : \ 10 parse 2drop ; IMMEDIATE
 \ Now we have backslash comments!
+
+\ Create some variables we need before we have variables
+create version 1 cells allot
+1 version !
+
+create is-compiling-rc 1 cells allot
+1 is-compiling-rc !
+
+: .( ')' parse type ; IMMEDIATE
+.( Booting from internal rc.5...)
 
 : ( ')' parse 2drop ; IMMEDIATE
 
@@ -56,15 +62,22 @@ create version 1 cells allot
 \ condition IF truepart ELSE elsepart THEN rest
 \ 		--> condition 0branch [offset0] truepart branch [offset1] elsepart rest
 \ 		where offset0 is the offset of falsepart and offset1 is the offset of rest
+
+: forward,	( -- addr )		\ Compile a forward offset reference (push here, compile dummy offset)
+	here 0 ,
+;
+
+: resolve-offset	( addr -- )		\ Resolve a previous forward offset
+	here over - swap !
+;
+
 : if
 	*compile 0branch	\ Compile 0branch
-	here				\ Remember where we are (on dstack)
-	0 ,					\ Compile dummy offset
+	forward,
 ; IMMEDIATE
 
 : then
-	here over -	\ Offset is current HERE - remembered HERE
-	swap !		\ Store the actual offset back at the dummy location
+	resolve-offset
 ; IMMEDIATE
 
 \ Note that the THEN word is identical between if and else - so else needs to
@@ -72,11 +85,9 @@ create version 1 cells allot
 \ on the dstack
 : else
 	*compile branch
-	here		\ Remember where we are
-	0 ,			\ Dummy elsepart offset
-	swap		\ Backfill the original IF offset
-	here over -
-	swap !
+	forward,
+	swap						( offset-else ) \ Backfill the original IF offset
+	resolve-offset
 ; IMMEDIATE
 
 \ ** Looping constructs
@@ -91,60 +102,22 @@ create version 1 cells allot
 ; IMMEDIATE
 
 : while
-  *compile 0branch
-  here			\ Remember where we are, compile branch dummy
-  0 ,
+	*compile 0branch
+	forward,
 ; IMMEDIATE
 
 : repeat		\ ( bloc wloc -- )
   swap			\ ( wloc bloc )
   *compile branch
   here -		\ ( wloc offset )
-  ,				\ ( wloc )
-  here			\ ( wloc here )
-  over -		\ ( wloc offset )
-  swap !
+	,				  \ ( wloc )
+	resolve-offset
 ; IMMEDIATE
 
 \ RECURSE makes a recursive call to the word that's currently being compiled.
 \   Get the latest word created, move to its cfa, and compile that
 : recurse
   latest >cfa compile, ; IMMEDIATE
-
-( num -- )
-: u.
-  base @ u/mod
-  ?dup if
-	recurse
-  then
-
-  dup 10 < if
-	'0'
-  else
-	10 -
-	'A'
-  then
-  +
-  emit
-;
-
-: . u. space ;
-
-\ Non destructively print the stack
-: .s
-  dsp@
-  begin
-	dup s0 @ <
-  while
-	dup @ u.
-	space
-	8+
-  repeat
-  cr
-  drop
-;
-
-: wp.s   base @ >r 16 base ! emit space .s cr r> base ! ;
 
   \ -- addr u
 : s"
@@ -153,21 +126,17 @@ create version 1 cells allot
 	\ Compiling
 	[compile] sliteral
   then
-  \ In interpreting state, just let
 ; IMMEDIATE
 
 \ 0= if <perror> then ...
 : abort"
   *compile 0branch
-  here
-  0 ,
-  [compile] s"
+	[compile] if
+	[compile] s"
   *compile type
   *compile cr
-  *compile abort
-  here
-  over -
-  swap !
+	*compile abort
+	[compile] then
 ; IMMEDIATE
 
 \ POSTPONE compiles a call to the following word, whether it is an immediate word or not.
@@ -194,7 +163,7 @@ create version 1 cells allot
 
 : unless
   postpone not
-  [compile] if
+	postpone if
 ; IMMEDIATE
 
 \ Read the next chr from the input source
@@ -224,8 +193,20 @@ create version 1 cells allot
 
 ( We now (have ((nested)) comments!) Yay!)
 
-: h,	( half -- )	here 2 allot h! ;
-: w,	( word -- )	here 4 allot w! ;
+: wrds	( n -- 2n )	\ Words are 2 bytes ie c shorts
+  2*
+;
+
+: longs ( n -- 4n )	\ Longs are C 32 bit ints
+  4*
+;
+
+: xlongs ( n -- 8n )	\ Xlongs are C 64 bit ints
+  8*
+;
+
+: w,	( half -- )	here [ 1 wrds ] literal allot w! ;
+: l,	( word -- )	here [ 1 longs ] literal allot l! ;
 
 ( addr u -- ) \ Compile the given string directly at HERE
 : compile-str
@@ -234,7 +215,7 @@ create version 1 cells allot
   swap cmove
 ;
 
-: *emit-next 	 $next	 compile-str ;
+: *emit-next 	   $next	 compile-str ;
 : *emit-doesbody $dodoes compile-str ;
 : *fix-cfa r> latest >cfa ! ;
 
@@ -270,6 +251,10 @@ create version 1 cells allot
 
 :  constant	variable  latest >cfa >body  ! does> @ ;
 : 2constant	2variable latest >cfa >body 2! does> 2@ ;
+
+: buffer: ( amt -- addr )
+	create allot align
+;
 
 : value constant ;
 : to
@@ -389,90 +374,6 @@ variable	do-sp	 0 do-sp !
 	1
   then
 ;
-
-\ Print a number right justified in a field of width chars. xt is expected to print the padding.
-: xu.r	( u width xt -- )
-  >r
-  swap		( width u )
-  dup		( width u u )
-  uwidth	( width u uwidth )
-  rot		( u uwidth width )
-  swap -	( u width-uwidth )
-  ( At this point if we asked for a width narrower than the number, it'll be negative. )
-  ( Spaces won't print a negative number of spaces anyway, so it's safe to call.)
-  r> execute
-  u.
-;
-
-: u.r			( u wid -- )
-  ['] spaces	( u wid xt )
-  xu.r ;
-
-: u.0r
-  ['] zeroes
-  xu.r ;
-
-\ Print a signed number, padded to a certain width.
-: x.r		( n width xt -- )
-  >r
-  swap		( width n )
-  dup 0< if
-	negate		( width u )
-	1			( flag to remember it was negative | width n 1 )
-	swap
-	rot
-	1-			( 1 u width-1   -1 to account for the - sign in the output )
-  else
-	0			( width u 0 )
-	swap		( width 0 u )
-	rot			( 0 u width )
-  then
-  swap			( flag width u )
-  dup uwidth	( flag width u uwidth )
-  rot			( flag u uwidth width )
-  swap -		( flag u width - uwidth )
-  r> execute
-  swap			( u flag )
-
-  if '-' emit then	( print - if it was originally negative )
-  u.
-;
-
-: repchar	( char n -- )
-  dup 0>	( char n flag )
-  if
-	0 do	( char )
-		dup emit
-	loop
-  else
-	drop
-  then
-  drop
-;
-
-: zeroes	( n -- )
-  '0' swap repchar
-;
-
-: spaces	( n -- )
-  bl swap repchar
-;
-
-: .r
-  ['] spaces
-  x.r ;
-
-: .0r
-  ['] zeroes
-  x.r ;
-
-\ Finally we get to define .
-: . 0 .r space ;
-
-\ The real u. has a trailing space in the standard
-: u. u. space ;
-
-: ? ( addr -- ) @ . ;
 
 : d0= ( xd -- flag )	or 0= ;
 : s>d ( n -- d )		dup 0< ;
@@ -621,12 +522,12 @@ cr .( Printing... )
 : codepage create align
 	\ The individual values will be backwards on the stack, ie. the 255th cp is first
 	256 0 do
-	  h,
+	  w,
 	loop
 
 	does>
 	( cp addr -- unicode )
-	swap $ff swap - 2* + h@
+	swap $ff swap - 2* + w@
 ;
 
 \ Only one we currently define is the IBM / DOS codepage (codepage 437, from wikipedia)
@@ -655,9 +556,6 @@ variable current-codepage ' cp437 current-codepage !
 : char-to-unicode		( char -- codepoint )
   current-codepage @ execute
 ;
-
-variable basehold
-: .2s base @ basehold ! 2 base ! .s basehold @ base ! ;
 
 : utfbyte ( chr bits -- )
   dup
@@ -715,7 +613,7 @@ variable basehold
   drop
 ;
 
-\ ** Pictured output
+\ ** Pictured and numeric output
 
 \ PIC
 300 aligned constant pic-size
@@ -756,7 +654,7 @@ variable inpic		false inpic !
 ;
 
 : digit 	( n -- char )	\ Convert a num to a digit (incorrect for values > 36)
-  9 over > if		\ 0 -> 48   10 -> 65
+  9 over < if		\ 0 -> 48   10 -> 65
 	7 +
   then
   '0' +
@@ -801,31 +699,258 @@ variable inpic		false inpic !
   over -
 ;
 
-: .sign			( n du -- )
+: #dsign		( n du -- ) \ Convert an unsigned double to a string, prepending a - sign if n < 0
   <#
-  bl hold
   #s
   rot sign
   #>
+;
+
+: #str			( n -- caddr u )	\ Convert n to a string (signed)
+  dup abs 0
+  #dsign
+;
+
+: #ustr			( n -- caddr u )	\ Convert n to a string (signed)
+  0 tuck
+  #dsign
+;
+
+: #dstr			( n -- caddr u )	\ Convert n to a string (signed)
+  tuck dabs
+  #dsign
+;
+
+: #udstr			( n -- caddr u )	\ Convert n to a string (signed)
+  0 -rot
+  #dsign
+;
+
+: u.			( u -- )
+  #ustr type space
+;
+
+: d.			( d -- )
+  #dstr type space
+;
+
+: ud.			( d -- )
+  #udstr type space
+;
+
+: repchar	( char n -- )
+  dup 0>	( char n flag )
+  if
+	0 do	( char )
+		dup emit
+	loop
+  else
+	drop
+  then
+  drop
+;
+
+: zeroes	( n -- )
+  '0' swap repchar
+;
+
+: spaces	( n -- )
+  bl swap repchar
+;
+
+\ Print a number right justified in a field of width chars. xt is expected to print the padding.
+: xud.r	( ud width xt -- )
+  >r				( ud width )
+  -rot #udstr		( width caddr u )
+  rot over -
+  r> execute
   type
 ;
 
-: u.
-  0 tuck
-  .sign
+: xd.r	( ud width xt -- )
+  >r				( ud width )
+  -rot #dstr		( width caddr u )
+  rot over -
+  r> execute
+  type
 ;
 
-(
+\ Print a number right justified in a field of width chars. xt is expected to print the padding.
+: xu.r	( u width xt -- )
+  >r				( u width )
+  swap #ustr		( width caddr u )
+  rot over -		( caddr u n )
+  r> execute
+  type
+;
+
+: x.r	( ud width xt -- )
+  >r			( ud width )
+  swap #str		( width caddr u )
+  rot over -	( caddr u n )
+  r> execute
+  type
+;
+
+: d.r			( u wid -- )
+  ['] spaces	( u wid xt )
+  xd.r ;
+
+: d.0r
+  ['] zeroes
+  xd.r ;
+
+: ud.r			( u wid -- )
+  ['] spaces	( u wid xt )
+  xud.r ;
+
+: ud.0r
+  ['] zeroes
+  xud.r ;
+
+: u.r			( u wid -- )
+  ['] spaces	( u wid xt )
+  xu.r ;
+
+: u.0r
+  ['] zeroes
+  xu.r ;
+
+: .r
+  ['] spaces
+  x.r ;
+
+: .0r
+  ['] zeroes
+  x.r ;
+
 : .
-  dup abs 0
-  .sign
+  base @ 10 = if
+	#str
+  else
+	#ustr
+  then
+  type space
 ;
-)
+
+: x.
+	base @
+	hex
+	swap .
+	base swap !
+;
+
+\ Non destructively print the stack
+: .s
+  dsp@
+  begin
+	dup s0 @ <
+  while
+	dup @ u.
+	space
+	8+
+  repeat
+  cr
+  drop
+;
+
+variable basehold
+: .2s base @ basehold ! 2 base ! .s basehold @ base ! ;
+: .xs base @ basehold ! hex .s basehold @ base ! ;
+
+\ ** Assertions
+: averts
+	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
+	?dup 0= if
+		type ' ' emit true abort"  averts?"
+	then
+	drop
+	nip nip
+	state @ if
+		postpone 0=
+		postpone 0branch
+		here 0 ,
+		swap postpone literal
+	  postpone execute
+		-20 postpone literal
+		postpone throw
+		here over - swap !
+	else
+		swap 0= if
+			execute
+			-20 throw
+		else
+			drop
+		then
+	then
+; IMMEDIATE
+
+: triggers		( flag "<name>" -- )
+	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
+	?dup 0= if
+		type ' ' emit true abort"  triggers?"
+	then
+	drop
+	nip nip
+	state @ if
+		postpone 0<>
+		postpone 0branch
+		here 0 ,
+		swap postpone literal
+		 postpone execute
+		-20 postpone literal
+		postpone throw
+		here over - swap !
+	else
+		swap 0<> if
+			execute
+			-20 throw
+		else
+			drop
+		then
+	then
+; IMMEDIATE
+
+: ? ( addr -- ) @ . ;
+
+: dump-xline		( addr n -- )
+	base @ -rot	( base addr n -- )
+	hex
+
+	?dup if
+	over		( base addr n addr )
+	16 u.r space			\ Print addr
+
+	dup			( base addr n n )
+	8/
+	0 ?do		( base addr n )
+	  over i cells +	( base addr n addr+i )
+	  @		( base addr n byte )
+	  16 u.0r space
+	loop
+
+	\ Print ascii equivalents
+	dup			( base addr n n )
+	3 *		  ( base addr n spc )
+
+	\ Pad to char location
 
 
-: d.			( d -- )
-  tuck dabs
-  .sign
+	[ 16 3 * ] literal	( base addr n spc bspc )
+	swap -
+	spaces			( base addr n )
+	0 ?do
+	  dup i +		( base addr addr+i )
+	  c@			( base addr byte )
+	  dup 1 >= if
+		uemit
+	  else
+		drop '.' emit
+	  then
+	loop
+	then
+	drop
+	base !
 ;
 
 : dump-line		( addr n<=16 -- )
@@ -840,7 +965,7 @@ variable inpic		false inpic !
 	0 ?do		( base addr n )
 	  over i +	( base addr n addr+i )
 	  c@		( base addr n byte )
-	  2 .0r space
+	  2 u.0r space
 	loop
 
 	\ Print ascii equivalents
@@ -881,6 +1006,23 @@ variable inpic		false inpic !
   16 *	+				( addr len )
   r> 					( len%16 addr-start )
   dump-line cr
+;
+
+: xdump 			  ( addr len -- )
+	aligned
+	16 /mod				( addr len%16 len/16 -- )
+	swap >r				( addr len/16 -- r: len%16 )
+
+	dup
+	0 ?do
+	over i 16 * +		( len addr daddr )
+	16 dump-xline cr		( len addr )
+	loop
+
+	\ Dump a possible partial ending line
+	16 *	+				( addr len )
+	r> 					( len%16 addr-start )
+	dump-xline cr
 ;
 
 : find-word-protected		( msg n -- )
@@ -997,15 +1139,23 @@ cr .( Search order... )
 get-current constant	forth-wordlist
 wordlist    constant	environment
 
-8 constant max-orders
+16 constant max-orders
 create search-context max-orders cells allot
 variable #search-context	0 #search-context !
 
 get-current constant forth-wordlist
+wordlist    constant internal
+
 
 : default-context	( -- forth-wordlist ... widn n )
-  forth-wordlist
-  1
+	is-compiling-rc @ if
+		forth-wordlist
+		internal
+		2
+	else
+		forth-wordlist
+		1
+	then
 ;
 
 : get-order	( -- widl ... widl n )
@@ -1015,7 +1165,6 @@ get-current constant forth-wordlist
   #search-context @
 ;
 
-decimal
 : set-order ( widl ... widn n | -1 )
   dup -1 = if
 	\ Push default wordlists
@@ -1030,11 +1179,10 @@ decimal
 \ Initialize to default-context
 -1 set-order
 
-\ Given a nt (lfa in our case), return the string name of the word represented
+\ Given a nt, return the string name of the word represented
 \ by that dict entry.
 : name>string		( nt -- caddr u )
-  cell+
-  c@ f_len_mask and
+	c@ f_len_mask and
   swap 1+ swap
 ;
 
@@ -1064,11 +1212,11 @@ create _wordbuf_2	64	allot	_wordbuf_2 64 erase
   >r
  _wordbuf_2 _wordbuf_1	( lowered normal )
   ['] matchxt			( lowered normal xt )
-  r>					( lowered normal xt wid )
-  exec-wordlist			( lowered normal 0 | xt 1 | xt -1 )
+	r>						  ( lowered normal xt wid )
+	exec-wordlist		( lowered normal 0 | xt 1 | xt -1 )
   ?dup if
 	2swap 2drop
-	swap xt>nt swap
+	swap xt>nt nip
   else
 	2drop drop
 	0
@@ -1093,12 +1241,16 @@ create _wordbuf_2	64	allot	_wordbuf_2 64 erase
   loop
 ;
 
-: find-xt
-  find-name		( nt -1 | nt 1 | 0 )
+: find-xt			( 0 | xt 1 | xt -1 )
+  find-name		( nt | 0 )
   dup 0<> if
-	swap
-	name>compile
-	swap
+	dup name>	( nt lfa )
+	?immediate if
+	  1
+	else
+	  -1
+	then
+	swap name>compile swap
   then
 ;
 
@@ -1109,13 +1261,13 @@ create _wordbuf_2	64	allot	_wordbuf_2 64 erase
   dup >r
   count find-name
   ?dup if
-	state @ if
-	  name>compile
-	else
-	  name>interpret
-	then
+		state @ if
+			name>compile
+		else
+			name>interpret
+		then
   else
-	r@ 0
+		r@ 0
   then
   r> drop
 ;
@@ -1125,18 +1277,57 @@ create _wordbuf_2	64	allot	_wordbuf_2 64 erase
 ;
 
 : definitions	( -- )
-  get-order swap set-current discard
+  get-order swap set-current 1- discard
+;
+
+: also	( -- )
+  get-order over swap 1+ set-order
+;
+
+: (wordlist) ( wid "<name>" -- ; )
+  create ,
+  does>
+	@ >r
+	get-order nip
+	r> swap set-order
+;
+
+forth-wordlist (wordlist) forth
+
+: only	( -- )	-1 set-order ;
+
+: previous ( -- )
+  get-order
+  nip 1- set-order ;
+
+\ Handy word for pushing a wid onto the search order
+: >order
+  >r get-order r> swap 1+ set-order
 ;
 
 \ Enough space to hold a max length counted string
 create _word-buf 257 allot align
 
 : word ( char -- c-addr )	\ Parse word delimited by char.
+  dup bl = if				\ If parsing blank separated, the standard suggests that 0 .. 32 should be sckipped but it isn't clear
+		drop
+		parse-word
+  else
+		dup dup 1+ skip
+		dup 1+ swap parse-token
+  then
+  >r _word-buf 1+ r@ cmove
+  r@ _word-buf c!
+  _word-buf r> + bl c!	\ Trailing blank
   _word-buf
-  dup
-  rot
-  parse
-  $toscs
+;
+
+: internal-defs
+	internal set-current
+;
+
+: public-defs
+	forth-wordlist set-current
 ;
 
 cr .( Environment... )
@@ -1168,9 +1359,551 @@ forth-wordlist	set-current
   then
 ;
 
+\ *** Simple string buffer
+.( Strings... )
+
+256 buffer: strcat-buf
+
+internal-defs
+variable strcat-buf-pos
+public-defs
+
+: strcat-reset
+	0 strcat-buf-pos !
+;
+
+strcat-reset
+
+: strcat-add		( addr u -- )
+	strcat-buf strcat-buf-pos @ + ( addr u dest )
+	swap dup >r cmove
+	r> strcat-buf-pos +!
+;
+
+: strcat-str
+	strcat-buf strcat-buf-pos @
+;
+
+: constant-with-name		( val addr u -- )	\ Create a new constant at runtime w/the given name in the current dict
+	\ There's no doubt a better way to do this. *create (build>) followed by direct compilation
+	strcat-reset
+	rot #ustr strcat-add
+	s"  constant " strcat-add
+	strcat-add
+	strcat-str evaluate
+;
+
 \ *** Interpret time if/then
 
+cr .( [if] [else] [then]... ) cr
+
+: [else]	( -- )
+  1 begin									\ level
+	begin bl word count dup while			\ level adr len
+	  2dup s" [if]" cicompare 0= if
+		2drop
+		1+									\ level'
+	  else									\ level adr len
+		2dup s" [else]" cicompare 0= if
+		  2drop
+		  1-
+		  dup if 1+ then					\ level'
+		else
+		  s" [then]" cicompare 0= if		\ level
+			1-								\ level'
+		  then
+		then
+	  then ?dup 0= if exit then				\ level'
+	repeat 2drop
+  refill 0= until
+  drop
+; IMMEDIATE
+
+: [if]		( flag -- )
+  0= if postpone [else] then
+; IMMEDIATE
+
+: [then]	( -- )
+; IMMEDIATE
+
+: [defined]
+  bl word find nip 0<>
+; IMMEDIATE
+
+: [undefined]
+  bl word find nip 0=
+; IMMEDIATE
+
+\ **** Structures
+.( Structures...) cr
+
+: begin-structure	( -- )
+	create
+	here 0 0 ,		\ Mark stack, lay dummy
+	does> @
+;
+
+: +field		\ n "name" -- ; Exec: addr -- 'addr
+  create over , +
+  does> @ +
+;
+
+: field:
+  aligned [ 1 cells ] literal +field
+;
+
+: wfield:
+  1 #aligned [ 1 wrds ] literal +field
+;
+
+: lfield:
+  2 #aligned [ 1 longs ] literal +field
+;
+
+: xfield:
+  3 #aligned [ 1 cells ] literal +field
+;
+
+: end-structure		( addr n -- )
+  swap !
+;
+
+\ **** Namespaced-field structures
+
+internal-defs
+.( Named structures...) cr
+: +context:	( "name" wid -- )
+  create immediate ,
+  does>
+  @ ( wid ) >order
+;
+public-defs
+
+\ Make a new word list for the struct's field definitions expected to follow.
+\ Pushes to the top of the search order + definitions so field defs go in this
+\ wlist.
+: struct:		( "name" -- wid 0 )	( order: -- wid )
+  get-current	( wid ) 0
+  wordlist
+  dup +context:
+  >order
+  definitions ( wid 0 )
+  s" : } previous ; immediate" evaluate
+;
+
+: '}'eval ( -- )
+  s" }" evaluate
+;
+
+\ Terminate a structure definition begun with struct:'
+\ 1) define "/struct", the structure size constant, in the struct namespace
+\ 2) Restore the search order and compilation wlst to that just before the
+\    invocation of "struct:"
+: ;struct		( wid u -- )
+  aligned
+  s" constant /struct" evaluate
+  ( wid ) set-current
+  '}'eval
+;
+
+1 [if]		\ Examples
+.( Examples) cr
+struct: person{
+2 cells +field name
+1 chars +field gender aligned
+1 cells +field age
+;struct
+
+struct: girl{
+person{
+  /struct +field self
+  /struct +field friend1
+}
+1 cells +field friend2
+2 cells +field favdrink
+;struct
+
+create george person{ /struct } allot
+create marie  girl{ /struct }   allot
+
+: name1 s" Marie" ;
+: name2 s" Bill" ;
+: name3 s" George" ;
+: drink1 s" cranberry juice" ;
+
+name1	marie girl{ self person{ name } }		2!
+'F'     marie girl{ self person{ gender } }		c!
+23		marie girl{ self person{ age } }		!
+
+name2	marie girl{ friend1 person{ name } }	2!
+'M'     marie girl{ friend1 person{ gender } }	c!
+25		marie girl{ friend1 person{ age } }		!
+
+george	marie girl{ friend2 } !
+
+name3	george	person{ name }		2!
+'M'		george	person{ gender }	c!
+21		george	person{ age }		!
+
+drink1	marie	girl{ favdrink }	2!
+
+: .gender ( char --)
+  case
+	'M' of	." male"	endof
+	'F' of	." female"	endof
+	." unspecified"
+  endcase
+;
+
+: .. '.' emit ;
+
+
+: show-girl	( instance -- )
+cr ." Her name is "
+	dup girl{ self person{ name } } 2@ type ..
+cr ." Her gender is "
+	dup girl{ self person{ gender } } c@ .gender ..
+cr ." Her age is "
+	dup girl{ self person{ age } } @ 2 .r ..
+cr ." Her favorite drink is "
+	dup girl{ favdrink } 2@ type ..
+cr ." Friend #1's name is "
+	dup girl{ friend1 person{ name } } 2@ type ..
+cr ." Friend #1's gender is "
+	dup girl{ friend1 person{ gender } } c@ .gender ..
+cr ." Friend #1's age is "
+	dup girl{ friend1 person{ age } } @ 2 .r ..
+cr ." Friend #2's name is "
+	dup girl{ friend2 } @ person{ name } 2@ type ..
+cr ." Friend #2's gender is "
+	dup girl{ friend2 } @ person{ gender } c@ .gender ..
+cr ." Friend #2's age is "
+		girl{ friend2 } @ person{ age } @ 2 .r .. bl emit
+;
+
+cr cr .( Here's Marie!)
+
+marie show-girl
+cr .( To see structure field names, execute:)
+cr .(   "person{ words }" and "girl{ words }".)
+cr
+
+[then]
+
+: see		( "<name>" -- )
+	parse-word find-xt dup 0= abort" Word not found."
+	swap
+
+	dup
+	cfa> ." : " id.
+	cell+		\ Skip cf
+
+	\ We have the XT of the word in question now
+	begin
+		dup @	['] exit <>
+	while
+		dup @
+		case
+		['] branch of ." branch( " cell+ dup @ 8/ . ." ) " endof
+		['] 0branch of ." 0branch( " cell+ dup @ 8/ . ." ) " endof
+		['] lit of cell+ dup @ . endof
+		['] sbranch of ." s" '"' emit bl emit \ sliteral -> broff <str>
+								cell+ dup @ +							\ Skip past str, next words are <lit> addr <lit> n
+								cell+ dup @ >r
+								cell+ cell+ dup @ r> swap type
+								'"' emit bl emit
+								endof
+		dup cfa> id.
+		endcase
+		cell+
+	repeat
+	drop
+	." ;"
+	0> if ." IMMEDIATE"
+	then
+	cr
+;
+
+\ **** Lambdas
+.( Lambdas... ) cr
+: [:
+	\ Compile the following structure:
+	\ <branch>
+	\ offset to lit xt push
+	\ DOCOL		<- XT of Lambda
+	\ ... Lambda code ...
+	state @
+	postpone branch
+	forward,
+	*docol ,
+	]
+; IMMEDIATE
+
+: ;]
+	\ Complete lambda definition:
+	\ <branch target> LIT <addr of docol>
+	\ ... Normal compilation continues
+
+	\ On stack: addr of back ref jump offset
+	postpone exit
+	dup resolve-offset		( addr )  \ Back patch
+	cell+								  ( addr' ) \ Skip to xt
+	over if
+	  [compile] literal
+	else
+		swap
+	then
+	state !
+; IMMEDIATE
+
+0 [if]
+: twrd dup ?dup if id. false else true then ;
+
+: test-lambda-word
+	." Testing lambdas - should have output similar to 'words':" cr
+	[:
+	dup ?dup if id. false else true then
+	;]	get-current exec-wordlist drop
+	cr
+;
+
+test-lambda-word
+.( testing outer lambda.. ) cr
+
+[: ." Testing lambda outside colon def" cr ;] execute
+[: ." Testing nested lambda (outside colon def):" [: ." Inner!" cr ;] execute ;] execute
+
+.( Do does experiment)
+: lambda-tbl		( cnt -- )
+	create
+	0 ?do , loop
+	does> swap cells + @ execute ;
+
+[: ." One" cr ;]
+[: ." Two" cr ;]
+[: ." Three" cr ;]
+[: ." Four" cr ;]
+[: ." Five" cr ;]
+5 lambda-tbl testtbl
+
+3 testtbl
+0 testtbl
+4 testtbl
+2 testtbl
+[then]
+
+\ **** Modules
+.( Modules...) cr
+
+internal-defs
+
+5 constant mod-stk-count
+16 constant max-order
+
+variable mod-stk-idx
+
+begin-structure mod-ent-size
+	field: module-count
+	field: module-base
+	field: module
+	field: mod-old-current
+end-structure
+
+mod-ent-size mod-stk-count * buffer: module-stack
+
+public-defs
+
+: x-stk-overflow ." module stack overflow" cr ;
+: x-stk-underflow ." module stack underflow" cr ;
+: x-ord-overflow ." wordlist order overflow" cr ;
+: x-defined ." module already defined" cr ;
+: x-not-found ." module not found" cr ;
+: x-tok-expected ." token expected" cr ;
+
+internal-defs
+
+: module-stack@
+	mod-stk-idx @ 0<> if
+		module-stack mod-stk-idx @ 1- mod-ent-size * +
+	else
+		0
+	then
+;
+
+: push-stack	( wid -- )
+	mod-stk-idx @ mod-stk-count < averts x-stk-overflow
+	1 mod-stk-idx +!
+	module-stack@
+	0 over module-count !
+	base @ over module-base !
+	get-current over mod-old-current !
+	over set-current
+	module !
+;
+
+: drop-stack
+	mod-stk-idx @ 1 > averts x-stk-underflow
+	module-stack@
+	dup mod-old-current @ set-current
+	module-base @ base !
+	get-order module-stack@ module-count @
+	begin dup 0<> while
+		1- swap 1- swap rot drop
+	repeat
+	drop
+	set-order
+	-1 mod-stk-idx +!
+;
+
+\ Add a wordlist to the search order
+: add	( wid )
+	>r get-order dup max-order < r> swap averts x-ord-overflow
+	module-stack@ module-count @ 0<> if
+		rot drop swap module-stack@ module @ swap 1+ set-order
+	else
+		swap 1+ set-order
+	then
+	mod-stk-idx @ 0<> averts x-stk-underflow
+	module-stack@
+	1 swap module-count +!
+;
+
+\ Remove a wordlist from the search order
+: remove ( wid -- )
+	mod-stk-idx @ 0 > averts x-stk-underflow
+	>r get-order module-stack@ module-count @
+	begin dup 0<> while
+		dup 1+ pick r@ = if
+			dup 1+ roll drop
+			-1 module-stack@ module-count +!
+			swap 1- swap
+		then
+		1-
+	repeat
+	drop rdrop set-order
+;
+
+\ Old find hook
+variable old-find-hook
+
+\ Find the first path separator in a name
+: find-path-sep ( caddr u -- u'|-1 )
+	swap 1+ swap 1-
+	1 begin over 2 > while
+			2 pick c@ ':' = if
+				2 pick 1+ c@ ':' = if
+					nip nip exit
+				then
+			then
+			rot 1+ rot 1- rot 1+
+		repeat
+	2drop drop -1
+;
+
+: ?drop			( ... 0 | <>0 -- ... | ... 0 )					\ Drop TOS but only if non zero
+	0= if 0 then
+;
+
+\ Execute or compile a word in the provided module
+: do-module-find ( caddr u -- xt|0 )
+	2dup find-path-sep dup -1 <>  if										( caddr u u' )
+		2 pick																						( caddr u u' caddr )
+		over																							( caddr u u' caddr u' )
+		old-find-hook @ execute														( caddr u u' 0|nt 1|nt -1 )
+		?dup if drop																			( caddr u u' xt )
+			>r 2 + tuck																			( caddr u'' u u' )
+			- -rot +																				( u-u' caddr' )
+			swap r>																					( caddr' u-u' xt )
+			-rot 2>r																				( xt r: caddr' u-u' )
+			>r get-order r>
+			execute
+			1 set-order
+			2r> find-name			?drop
+			>r set-order r>
+		else
+			2drop drop 0
+		then
+	else
+		drop old-find-hook @ execute
+	then
+;
+
+: constant-with-nt
+	name>string
+	constant-with-name
+;
+
+public-defs
+
+\ Start a module definition
+: begin-module ( "name" -- )
+	parse-word dup 0<> averts x-tok-expected
+	2dup find-name ?dup if
+		['] x-defined execute -20 throw
+	else
+		wordlist dup >r -rot constant-with-nt r>
+	then
+	dup push-stack
+	add
+;
+
+\ Start a private module definition
+: private-module		( -- )
+	wordlist dup push-stack add
+;
+
+: end-module				( -- )
+	drop-stack
+;
+
+\ End a module def and place the module on the stack
+: end-module>
+	mod-stk-idx @ 1 > averts x-stk-underflow
+	module-stack@ module @
+	drop-stack
+;
+
+\ Import a module
+: import	add ;
+
+\ Unimport a module
+: unimport remove ;
+
+0 mod-stk-idx !
+
+.( Installing module word find hook...)
+forth-wordlist push-stack
+forth-wordlist add
+
+find-word-vec @ old-find-hook !
+' do-module-find find-word-vec !
+.( Done.) cr
+
+.( Module testing...) cr
+begin-module modtest1
+	10 constant tenconst
+	20 constant twentyconst
+	: printhi ." Hello modular world!" cr
+end-module
+
+modtest1::printhi
+
+modtest1 import
+printhi
+modtest1 unimport
+
+continue-module modtest1
+	: printhi1 printhi ." Hello again from modular world!" cr
+end-module
+
+modtest1::printhi1
+
+[defined] printhi [if] .( printhi defined) cr [else] .( printhi undefined) [then]
+
 \ *** code / code; and friends
+\ *** o
+.( Code, end-code...) cr
+
 : ;code
   postpone *fix-cfa
 ; IMMEDIATE
@@ -1184,8 +1917,14 @@ hide-name (end-code-int)
 hide-name (end-code)
 hide-name (code)
 
-.( Done.) cr
+\ ****
 
 \ Print stats
-here swap -
+get-ticks swap -
+1000 /
+swap here swap -
 dup . .( / ) 8 / . .( bytes / cells used by startup code.) cr
+.( Loaded in ) . .( ms.) cr
+\ Hide internal words (is-compiling-rc 0 = remove internal from default search order)
+0 is-compiling-rc !
+-1 set-order

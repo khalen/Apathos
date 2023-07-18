@@ -43,7 +43,7 @@
 extern "C" {
 #endif
 
-typedef unsigned long long size_t;
+#include "base_defs.h"
 
 extern char *linenoiseEditMore;
 

@@ -16,10 +16,16 @@ typedef u64            addr_t;
 typedef volatile u32   reg32;
 typedef volatile u64   reg64;
 
+typedef u64 size_t;
+typedef i64 ssize_t;
+
 #define KB    1024
 #define MB    (1024 * KB)
 #define GB    (1024 * MB)
 
-#define NULL  ((void *)0)
+#define NULL  0
 
 #define PACKED __attribute__((packed, aligned(4)))
+
+#define offsetof(struc, fiel) \
+	__builtin_offsetof(struc, fiel)

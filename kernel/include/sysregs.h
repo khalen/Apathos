@@ -5,12 +5,14 @@
 #define SCTLR_EOE_LITTLE_ENDIAN                          (0 << 24)
 #define SCTLR_I_CACHE_DISABLED                           (0 << 12)
 #define SCTLR_D_CACHE_DISABLED                           (0 << 2)
+#define SCTLR_I_CACHE_ENABLED                            (1 << 12)
+#define SCTLR_D_CACHE_ENABLED                            (1 << 2)
 #define SCTLR_NAA										 (1 << 6) | (0 << 1)   /* Disable unaligned access faults */
 #define SCTLR_MMU_DISABLED                               (0 << 0)
 #define SCTLR_MMU_ENABLED                                (1 << 0)
 
-#define SCTLR_VALUE_MMU_DISABLED (SCTLR_RESERVED | SCTLR_EE_LITTLE_ENDIAN | SCTLR_I_CACHE_DISABLED | SCTLR_D_CACHE_DISABLED | SCTLR_MMU_DISABLED | SCTLR_NAA)
-#define SCTLR_VALUE_MMU_ENABLED (SCTLR_RESERVED | SCTLR_EE_LITTLE_ENDIAN | SCTLR_I_CACHE_DISABLED | SCTLR_D_CACHE_DISABLED | SCTLR_MMU_ENABLED | SCTLR_NAA)
+#define SCTLR_VALUE_MMU_DISABLED (SCTLR_RESERVED | SCTLR_EE_LITTLE_ENDIAN | SCTLR_I_CACHE_ENABLED | SCTLR_D_CACHE_DISABLED | SCTLR_MMU_DISABLED | SCTLR_NAA)
+#define SCTLR_VALUE_MMU_ENABLED  (SCTLR_RESERVED | SCTLR_EE_LITTLE_ENDIAN | SCTLR_I_CACHE_ENABLED | SCTLR_D_CACHE_ENABLED  | SCTLR_MMU_ENABLED  | SCTLR_NAA)
 
 // D13.2.47 in the aarch64 reference
 #define HCR_RW                               (1 << 31)
@@ -53,6 +55,6 @@
 #define CPACR_EL1_VALUE   (CPACR_EL1_FPEN | CPACR_EL1_ZEN)
 
 /* exception syndrome register EL1 (ESR_EL1) */
-#define ESR_ELx_EC_SHIFT 26
-#define ESR_ELx_EC_SVC64 0x15
-#define ESR_ELx_EC_DA_LOW 0x24
+#define ESR_ELx_EC_SHIFT 	26
+#define ESR_ELx_EC_SVC64	0x15
+#define ESR_ELx_EC_DA_LOW	0x24

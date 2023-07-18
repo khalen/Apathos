@@ -246,6 +246,26 @@ defcode	NROT, "-rot"	// (a b c -- c a b)
 	push3	x0, x2, x1
 	next
 
+// rotate the given word to the top of the stack (not counting current tos, ie. same convention as pick)
+defcode ROLL, "roll"
+	pop	x0
+
+	lsl	x1, x0, #3
+	add	x2, x1, dsp		// x2 = addr of new tos
+	ldr	x5, [x2], #-8
+	add	x3, x2, #8		// x2 = src x3 = dst
+	b	2f
+
+1:	ldr	x4, [x2], #-8		// ARM64 quirk - default for post-offset is to update reg; default for pre-offset is to NOT update reg
+	str	x4, [x3], #-8		// +16 because we have already backed up by 8
+
+2:	cmp	x3, dsp
+	bne	1b
+
+	str	x5, [dsp]
+	next
+
+
 defcode	NIP, "nip"	// (a b -- b)
 	pop	x0
 	str	x0, [dsp]
@@ -609,8 +629,10 @@ defcode	XOR, "xor"
 
 defcode	ABS, "abs"
 	pop	x0
-	bfi	x0, xzr, #63, #1		// Clear top bit
-	push	x0
+	cmp	xzr, x0
+	csneg	x1, x0, x0, lt
+	push	x1
+	next
 
 // *** Double words
 // ( d n -- n1 n2 ) 128 bit narrowing divide - d = hi lo   n = divisor  n1 = remain n2 = quot
@@ -718,6 +740,7 @@ defcode DPLUSMINUS, "d+-"
 	eor	x3, x1, x2	// x3 < 0 when d1 needs negating
 	cmp	x3, xzr
 	blt	dnegate_impl
+	push2	x0, x1
 	next
 
 defword	DABS, "dabs"
@@ -813,6 +836,11 @@ defcode BRANCH, "branch"
 	add	fip, fip, x1
 	next
 
+defcode SBRANCH, "sbranch"		// Just a branch with a different name so we can detect string literals on disassembly
+	ldr	x1, [fip]
+	add	fip, fip, x1
+	next
+
 defcode	ZBRANCH, "0branch"
 	pop	x0
 	cmp	x0, xzr
@@ -831,12 +859,12 @@ defcode CSTORE, "c!"		// (v addr --) *(u8 *)addr = v & 0xFF
 	strb	w1, [x0]
 	next
 
-defcode HSTORE, "h!"		// (v addr --) *(u16 *)addr = v & 0xFFFF
+defcode WSTORE, "w!"		// (v addr --) *(u16 *)addr = v & 0xFFFF
 	pop2	x1, x0
 	strh	w1, [x0]
 	next
 
-defcode wSTORE, "w!"		// (v addr --) *(u32 *)addr = v & 0xFFFFFFFF
+defcode LSTORE, "l!"		// (v addr --) *(u32 *)addr = v & 0xFFFFFFFF
 	pop2	x1, x0
 	str	w1, [x0]
 	next
@@ -867,13 +895,13 @@ defcode	CFETCH, "c@"	// (addr -- v) v = *(byte *)addr
 	push	x1
 	next
 
-defcode	HFETCH, "h@"	// (addr -- v) v = *(byte *)addr
+defcode	WFETCH, "w@"	// (addr -- v) v = *(short *)addr
 	pop	x0
 	ldrh	w1, [x0]
 	push	x1
 	next
 
-defcode	WFETCH, "w@"	// (addr -- v) v = *(byte *)addr
+defcode	LFETCH, "l@"	// (addr -- v) v = *(long *)addr
 	pop	x0
 	ldr	w1, [x0]
 	push	x1
@@ -1111,7 +1139,8 @@ defcode STACK, "stack"
 	mov	x0, dsp
 	loadvar	x1, S0
 	ldr	x2, =data_stack_top
-	sub	x2, x2, x1
+	ldr	x3, =data_stack
+	sub	x2, x2, x3
 	push3	x0, x1, x2
 	next
 
@@ -1128,7 +1157,8 @@ defcode RSTACK, "rstack"
 	mov	x0, rsp
 	loadvar	x1, R0
 	ldr	x2, =return_stack_top
-	sub	x2, x2, x1
+	ldr	x3, =return_stack
+	sub	x2, x2, x3
 	push3	x0, x1, x2
 	next
 
@@ -1367,7 +1397,7 @@ defword TOGGLEHIDELATEST, "toggle-hide-latest"
 	fw	TOGGLEHIDE
 	fw	EXIT
 
-defword	IMMEDIATE, "immediate", F_IMMEDIATE | F_BUILTIN
+defword	IMMEDIATE, "immediate"
 	fw	LASTNAME
 	fw	DUP, CFETCH
 	fw	LIT, F_IMMEDIATE
@@ -1383,7 +1413,7 @@ defword	IMMEDIATE, "immediate", F_IMMEDIATE | F_BUILTIN
 // T:	LIT, addr
 // 	LIT, u
 defword SLITERAL, "sliteral", F_IMMEDIATE | F_BUILTIN
-	fw	LIT, BRANCH, COMMA	// compile branch
+	fw	LIT, SBRANCH, COMMA	// compile branch
 	fw	DUP			// addr u u
 	fw	CELLPLUS		// addr u (u+8)
 	fw	ALIGNED			// addr u (u+8 aligned)
@@ -2288,7 +2318,7 @@ defword COLDSTART, "*coldstart"
 cold_start:
 	fw	LIT, WARMSTART
 	fw	STARVRESET, STORE
-	// fw	RUNRC
+	fw	RUNRC
 	fw	REPL
 	fw	EXIT
 
@@ -2364,6 +2394,11 @@ defcode	REFILL, "refill"
 	push	xzr
 
 .ref_done:
+	next
+
+defcode	GETTICKS, "get-ticks"
+	call	timer_get_ticks
+	push	x0
 	next
 
 // This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly

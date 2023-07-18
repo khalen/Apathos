@@ -1,8 +1,11 @@
 #include "base_defs.h"
 #include "peripherals/aux.h"
 
+#ifdef __cplusplus
 extern "C"
 {
+#endif
+
 static inline u32 uart_isReadByteReady()
 {
 	return AUX_REGS->MuLsrReg & 0x01;
@@ -45,4 +48,6 @@ char uart_getc();
 // Raw buffer write with no translation
 u64 uart_read(void *buffer, u64 len);
 
+#ifdef __cplusplus
 }
+#endif

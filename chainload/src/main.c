@@ -14,7 +14,7 @@ void receiver(char *loadaddr)
 	char *kernel = loadaddr;
 
 	uart_init();
-	uart_puts("\r\n\r\nBooting chainloader...\r\n");
+	uart_puts("\r\n\r\nBooting chainloader, USB...\r\n");
 
 	do
 	{

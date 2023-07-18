@@ -1,5 +1,6 @@
 
 #include "mem.h"
+#include "base_defs.h"
 #include "mmu.h"
 #include "mm.h"
 #include "peripherals/base.h"
@@ -10,15 +11,7 @@ extern "C"
 
 void *memzero(void *dest, u64 n)
 {
-	u8* bDest = (u8 *) dest;
-	u8* bEnd  = bDest + n;
-
-	while (bDest < bEnd)
-	{
-		*bDest++ = 0;
-	}
-
-	return dest;
+	return memset(dest, 0, n);
 }
 
 void *memset(void *dest, u64 n, u64 cIn)
@@ -80,12 +73,40 @@ void *memmove(void *dest, const void* src, u64 n)
 	return dest;
 }
 
+i64 memcmp(const void* av, const void* bv, u64 n)
+{
+	const u8* a = (const u8 *)av;
+	const u8* b = (const u8 *)bv;
+	for (u64 i = 0; i < n; i++)
+	{
+		i64 vv = a[i] - b[i];
+		if (vv != 0ll)
+			return vv;
+	}
+	return 0;
+}
+
 u64 strlen(const char *str)
 {
 	ssize_t i = 0;
 	for (; *str != 0; str++, i++)
 		;
 	return i;
+}
+
+char* strchr(char* str, u64 c)
+{
+	if (str == nullptr)
+		return nullptr;
+
+	char cc = (char)(c & 0xFF);
+	for (; *str != 0; str++)
+	{
+		if (*str == cc)
+			return str;
+	}
+
+	return nullptr;
 }
 
 // MMU linear mapping page table init stuff //
@@ -101,7 +122,7 @@ u64 strlen(const char *str)
 #define TD_DEVICE_BLOCK_FLAGS      (TD_ACCESS | TD_INNER_SHARABLE | TD_KERNEL_PERMS | (MATTR_DEVICE_nGnRnE_INDEX << 2) | TD_BLOCK | TD_VALID)
 
 #define MATTR_DEVICE_nGnRnE        0x0
-#define MATTR_NORMAL_NC            0x44
+#define MATTR_NORMAL_NC            0xFF
 #define MATTR_DEVICE_nGnRnE_INDEX  0
 #define MATTR_NORMAL_NC_INDEX      1
 #define MAIR_EL1_VAL               ((MATTR_NORMAL_NC << (8 * MATTR_NORMAL_NC_INDEX)) | MATTR_DEVICE_nGnRnE << (8 * MATTR_DEVICE_nGnRnE_INDEX))
