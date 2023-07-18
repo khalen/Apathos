@@ -1,3 +1,0 @@
-[submodule "kernel/tinyusb"]
-	path = kernel/tinyusb
-	url = https://github.com/hathach/tinyusb.git
