@@ -20,6 +20,12 @@ core_freq_min=500
 # Run as fast as firmware / board allows
 arm_boost=1
 
+[HDMI:0]
+hdmi_mode=16
+
+[HDMI:1]
+hdmi_mode=16
+
 armstub=armstub8.img
 
 enable_jtag_gpio=1

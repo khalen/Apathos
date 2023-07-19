@@ -263,17 +263,17 @@ create run-tests 1 cells allot
 : to
   ' >body
   state @ if
-	[compile] literal
+	postpone literal
 	postpone !
   else
 	!
   then
 ; IMMEDIATE
 
-: to
+: +to
   ' >body
   state @ if
-	[compile] literal
+	postpone literal
 	postpone +!
   else
 	+!
@@ -1797,19 +1797,22 @@ variable old-find-hook
 \ Find the first path separator in a name
 : find-path-sep ( caddr u -- u'|-1 )
 	swap 1+ swap 1-
-	1 begin over 2 > while
-			2 pick c@ ':' = if
-				2 pick 1+ c@ ':' = if
-					nip nip exit
-				then
+	1
+	begin
+		over 2 >
+	while
+		2 pick c@ ':' = if
+			2 pick 1+ c@ ':' = if
+				nip nip exit
 			then
-			rot 1+ rot 1- rot 1+
-		repeat
+		then
+		rot 1+ rot 1- rot 1+
+	repeat
 	2drop drop -1
 ;
 
 : ?drop			( ... 0 | <>0 -- ... | ... 0 )					\ Drop TOS but only if non zero
-	0= if 0 then
+	dup 0<> if drop then
 ;
 
 \ Execute or compile a word in the provided module
@@ -1827,7 +1830,11 @@ variable old-find-hook
 			execute
 			1 set-order
 			2r> find-word
-			2>r set-order 2r>
+			dup if
+				2>r set-order 2r>
+			else
+				drop set-order 0
+			then
 		else
 			2drop drop 0
 		then
@@ -1835,12 +1842,6 @@ variable old-find-hook
 		drop old-find-hook @ execute
 	then
 ;
-
-: constant-with-nt
-	name>string
-	constant-with-name
-;
-
 
 public-defs
 
@@ -1925,23 +1926,293 @@ modtest1::printhi1
 [defined] printhi [if] .( printhi defined) cr [else] .( printhi undefined) cr [then]
 [then]
 
-\ *** code / code; and friends
-.( Code, end-code...) cr
+: ?execute	( ... xt|0 -- ... ) \ Execute an xt if it isn't zero
+	?dup if execute then
+;
 
-: ;code
-  postpone *fix-cfa
+: defer ( "name" -- )	\ Define a name to hold
+	create ['] abort ,
+	does> ?execute
+;
+
+: defer@ ( deferrer -- xt ) >body @ ;
+: defer! ( xt deferrer -- ) >body ! ;
+: is	( "name" -- )
+	state @ if
+		postpone ['] postpone defer!
+	else
+		' defer!
+	then
 ; IMMEDIATE
 
-: (code) here latest >cfa ! ;
-: code : (code) ;
-: (end-code-int) latest toggle-hide [compile] [ ;
-: (end-code) (end-code-int) ; IMMEDIATE
-: end-code [compile] *emit-next (end-code-int) ; IMMEDIATE
-hide-name (end-code-int)
-hide-name (end-code)
-hide-name (code)
+\ **** RPI SPECIFIC HARDWARE STUFF ****
 
-\ ****
+\ Video
+1920 constant framebuffer-width
+1080 constant framebuffer-hgt
+
+5120 constant phys-width
+1440 constant phys-hgt
+
+$FE000000 constant	peripheral-base
+
+\ Firmware mailbox support
+begin-module mailbox
+	align32
+
+	36 longs buffer: mbox-buffer
+
+	0 constant request
+
+	begin-module ch
+	  0 constant power
+	  1 constant fb
+	  2 constant vuart
+	  3 constant vchiq
+	  4 constant leds
+	  5 constant btns
+	  6 constant touch
+	  7 constant count
+	  8 constant prop
+	end-module
+
+	\ Interface to video hardware mailbox
+	begin-module videocore
+
+		begin-module tag
+			$28001 constant setpower
+			$38002 constant setclkrate
+
+			$48003 constant setphywh
+			$48004 constant setvirtwh
+			$48005 constant setdepth
+			$48006 constant setpxlordr
+			$48009 constant setvirtoff
+			$40001 constant getfb
+			$40008 constant getpitch
+
+			$00000 constant last
+		end-module
+
+	  peripheral-base $0000B880 +
+		           constant mbox
+	  mbox $00 + constant read
+	  mbox $10 + constant poll
+	  mbox $14 + constant sender
+	  mbox $18 + constant status
+	  mbox $1c + constant config
+	  mbox $20 + constant write
+
+	  $80000000 constant response
+	  $80000000 constant full
+	  $40000000 constant empty
+
+		: wait-while-full  ( -- ) \ Wait until mbox isn't full
+			." Full wait.." cr
+			begin
+				status l@ full and
+				0=
+			until
+		;
+
+		: wait-while-empty ( -- ) \ Wait until mbox isn't empty
+			." Empty wait.." cr
+			begin
+				status l@ empty and
+				0=
+		  until
+		;
+
+		: call ( byte -- )  \ Issue a video mb request, then wait until there is a reply
+			wait-while-full
+
+			\ Write command
+			$F and mbox-buffer +
+			write l!
+
+			begin
+				wait-while-empty
+
+				read l@ 0<>
+				mbox-buffer 1 longs + l@ response =
+				and
+			until
+			true
+		;
+
+		: get-mbox		( idx -- val )	\ Set the idx'th word in the mbox buffer to val
+			longs mbox-buffer + l@
+		;
+
+		: set-mbox		( val idx -- )	\ Set the idx'th word in the mbox buffer to val
+			longs mbox-buffer + l!
+		;
+
+		: init-framebuffer	( -- wid hgt pitch isrgb fbaddr )		\ Init the framebuffer and return its values
+
+			35 longs  				 0 set-mbox		\ Length of msg in bytes
+			mailbox::request   1 set-mbox
+
+			tag::setphywh 		 2 set-mbox		\ Physical w/h
+			2 longs						 3 set-mbox		\ Value size in bytes
+			2 longs 					 4 set-mbox		\ Value size in bytes
+			phys-width	 			 5 set-mbox
+			phys-hgt		 			 6 set-mbox
+
+			tag::setvirtwh 		 7 set-mbox		\ Virtual w/h
+			2 longs						 8 set-mbox
+			2 longs 					 9 set-mbox
+			framebuffer-width	10 set-mbox
+			framebuffer-hgt		11 set-mbox
+
+			tag::setvirtoff		12 set-mbox
+			2 longs						13 set-mbox
+			2 longs						14 set-mbox
+			0									15 set-mbox
+			0									16 set-mbox		\ No offset
+
+			tag::setdepth			17 set-mbox
+			1 longs						18 set-mbox
+			1 longs						19 set-mbox
+			32								20 set-mbox		\ 32 bpp
+
+			tag::setpxlordr		21 set-mbox
+			1 longs						22 set-mbox
+			1 longs						23 set-mbox
+			1 								24 set-mbox		\ rgb
+
+			tag::getfb				25 set-mbox
+			2 longs						26 set-mbox
+			2 longs						27 set-mbox
+			4096							28 set-mbox		\ fbinfo.pointer
+			0									29 set-mbox		\ fbinfo.size
+
+			tag::getpitch			30 set-mbox
+			1 longs						31 set-mbox
+			1 longs						32 set-mbox
+			0									33 set-mbox
+
+			tag::last					34 set-mbox
+
+			ch::prop	call	if
+				20 get-mbox	32 =
+				28 get-mbox 0<> and if
+					10 get-mbox
+					11 get-mbox
+					33 get-mbox
+					24 get-mbox
+					29 get-mbox
+					28 get-mbox $3FFFFFFF and
+				else
+					hex
+					." BPP: " 20 get-mbox . cr
+					." FB:  " 28 get-mbox . cr
+					decimal
+					abort" Couldn't init framebuffer."
+				then
+			then
+		;
+
+	end-module
+
+end-module
+
+.( Initializing framebuffer...)
+mailbox::videocore::init-framebuffer
+
+begin-module framebuffer
+	constant addr
+	constant size
+	constant isrgb
+	constant pitch
+	constant height
+	constant width
+
+	: set-xel		( rgb x y -- )
+		pitch * addr + longs + l!
+	;
+
+	: hline			( rgb	x	y len -- )	\ Draw a horizontal line starting at x, y .. len
+		\ ." H: " .xs
+		>r pitch * addr + swap longs +		( rgb xeladdr r: len )
+		dup r> longs + swap					( rgb eaddr	saddr )
+		?do	dup i l! 4 +loop
+		drop
+	;
+
+	: vline			( rgb x y len -- )	\ Draw a vertical line starting at x, y .. len
+		\ ." V: " .xs
+		>r pitch * addr + swap longs +			\ saddr
+		dup r> pitch * +				\ eaddr
+		swap ?do dup i l! pitch +loop
+		drop
+	;
+
+	0 value x
+	0 value y
+	0 value wid
+	0 value hgt
+	: box	( rgb x y wid hgt -- )
+		\ ." Box: " .xs
+		to hgt
+		to wid
+		to y
+		to x
+		dup x y       wid hline
+		dup x y hgt + wid hline
+		dup x y			  hgt vline
+		    x wid + y hgt vline
+	;
+
+	: >rgb	( r g b -- 0rgb )
+		     $FF and ( 0 lshift or )
+		swap $FF and 8  lshift or	 ( r gb )
+		swap $FF and 16 lshift or	 ( rgb  )
+	;
+
+	create dos-palette
+	$55 $55 $55 >rgb l,
+	$00 $00 $00 >rgb l,
+	$55 $55 $FF >rgb l,
+	$00 $00 $AA >rgb l,
+	$55 $FF $55 >rgb l,
+	$00 $AA $00 >rgb l,
+	$55 $FF $FF >rgb l,
+	$00 $AA $AA >rgb l,
+	$FF $55 $55 >rgb l,
+	$AA $00 $00 >rgb l,
+	$FF $55 $FF >rgb l,
+	$AA $00 $AA >rgb l,
+	$FF $FF $55 >rgb l,
+	$AA $55 $00 >rgb l,
+	$FF $FF $FF >rgb l,
+	$AA $AA $AA >rgb l,
+
+	: dos-color	( i -- rgb )		\ Return the ith color in the dos palette
+		longs dos-palette + l@
+	;
+end-module
+
+hex
+." framebuffer     : " framebuffer::addr . cr
+." framebuffer-size: " framebuffer::size . cr
+." isrgb           : " framebuffer::isrgb . cr
+." pitch           : " framebuffer::pitch . cr
+decimal
+." width           : " framebuffer::width . cr
+." height          : " framebuffer::height . cr
+
+framebuffer import
+get-ticks
+2 dos-color 0 0 width 1- height 1- box
+4 dos-color 100 100 100 100 box
+9 dos-color 50 50 50 50 box
+10 dos-color 25 25 25 25 box
+get-ticks swap - 1000 / .( Took ) . .(  ms to draw boxes.) cr
+framebuffer unimport
+
+\ The goal of this is to get a minimal implementation of block read/write going on SD card, so we can have actual file I/O.
+\
 
 \ Print stats
 get-ticks swap -

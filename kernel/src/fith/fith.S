@@ -1179,6 +1179,20 @@ defcode ALIGN, "align"
 	savevar	CP, x2
 	next
 
+defcode ALIGN16, "align16"
+	loadvar	x0, CP
+	add	x1, x0, #15
+	bic	x2, x1, #15
+	savevar	CP, x2
+	next
+
+defcode ALIGN32, "align32"
+	loadvar	x0, CP
+	add	x1, x0, #31
+	bic	x2, x1, #31
+	savevar	CP, x2
+	next
+
 defcode ALIGNED, "aligned"
 	pop	x0
 	add	x1, x0, #7
