@@ -111,8 +111,12 @@ scw5	.req	w28
 	ldr	\reg3, [dsp], #8
 .endm
 
+// This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
+// "assemble" it into other words without having to keep it in sync in more than one place.
 .macro	next
-	b	_NEXT
+	ldr	x0, [fip], #8
+	ldr	x1, [x0]
+	br	x1
 .endm
 
 // ** Word flag bits
@@ -2430,6 +2434,117 @@ defcode	GETTICKS, "get-ticks"
 	fw	COMMA
 .endm
 
+defcode SCSLR1, "(get-scslr1)"
+	mrs	x0, sctlr_el1
+	push	x0
+	next
+
+defcode DHGI, "(draw-hgi)"	// ( fgrgb bgrgb addr hc pitch -- fgrgb bgrgb addr' )
+	pop	x4
+	pop4	x0, x1, x2, x3
+
+	add	x5, x2, x4, LSL #3
+
+1:	cmp	x2, x5
+	beq	2f
+
+	tst	x3, #1
+	csel	x7, x0, x1, ne
+	tst	x3, #2
+	csel	x8, x0, x1, ne
+	orr	x7, x7, x8, LSL #32
+	str	x7, [x2,  #0]
+
+	tst	x3, #4
+	csel	x7, x0, x1, ne
+	tst	x3, #8
+	csel	x8, x0, x1, ne
+	orr	x7, x7, x8, LSL #32
+	str	x7, [x2, #8]
+
+	tst	x3, #16
+	csel	x7, x0, x1, ne
+	tst	x3, #32
+	csel	x8, x0, x1, ne
+	orr	x7, x7, x8, LSL #32
+	str	x7, [x2, #16]
+
+	tst	x3, #64
+	csel	x7, x0, x1, ne
+	tst	x3, #128
+	csel	x8, x0, x1, ne
+	orr	x7, x7, x8, LSL #32
+	str	x7, [x2, #24]
+
+	add	x2, x2, x4
+	lsr	x3, x3, #8
+	b	1b
+
+2:	push3	x0, x1, x2
+	next
+
+defcode DHGISCALED, "(draw-hgi-scaled)"	// ( fgrgb bgrgb addr hc pitch -- fgrgb bgrgb addr' )
+	pop	x4
+	pop4	x0, x1, x2, x3
+
+	orr	x10, x0, x0, LSL #32
+	orr	x11, x1, x1, LSL #32
+
+	add	x5, x2, x4, LSL #4
+	mov	x12, x2
+	add	x12, x12, x4
+
+1:	cmp	x2, x5
+	beq	2f
+
+	tst	x3, #1
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #0]
+	str	x7, [x12, #0]
+
+	tst	x3, #2
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #8]
+	str	x7, [x12, #8]
+
+	tst	x3, #4
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #16]
+	str	x7, [x12, #16]
+
+	tst	x3, #8
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #24]
+	str	x7, [x12, #24]
+
+	tst	x3, #16
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #32]
+	str	x7, [x12, #32]
+
+	tst	x3, #32
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #40]
+	str	x7, [x12, #40]
+
+	tst	x3, #64
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #48]
+	str	x7, [x12, #48]
+
+	tst	x3, #128
+	csel	x7, x10, x11, ne
+	str	x7, [x2,  #56]
+	str	x7, [x12, #56]
+
+	add	x2, x2, x4, LSL #1
+	add	x12, x12, x4, LSL #1
+	lsr	x3, x3, #8
+	b	1b
+
+2:	push3	x0, x1, x2
+	next
+
 // ** DODOES support **
 
 // A create...does> word is basically a special create...;code
@@ -2619,4 +2734,4 @@ _DOCOL:
 _NEXT:
 	next_impl
 .align 3
-	.equ next_impl_size, . - _NEXT
+	.equ next_impl_size, .

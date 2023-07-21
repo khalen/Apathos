@@ -2,11 +2,13 @@
 .idea
 tmp/
 bin/conman
+bin/fithfont
 build/
 .gdb_history
 
 # Ignore conman binary
 conman/conman
+fithfont/fithfont
 a.out
 
 *.o

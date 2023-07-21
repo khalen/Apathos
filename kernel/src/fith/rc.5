@@ -1948,11 +1948,11 @@ modtest1::printhi1
 \ **** RPI SPECIFIC HARDWARE STUFF ****
 
 \ Video
-1920 constant framebuffer-width
-1080 constant framebuffer-hgt
+1280 constant framebuffer-width
+720 constant framebuffer-hgt
 
-5120 constant phys-width
-1440 constant phys-hgt
+1280 constant phys-width
+720 constant phys-hgt
 
 $FE000000 constant	peripheral-base
 
@@ -1960,7 +1960,18 @@ $FE000000 constant	peripheral-base
 begin-module mailbox
 	align32
 
-	36 longs buffer: mbox-buffer
+	40 longs buffer: mbox-buffer
+	: clear-mbox-buffer ( -- )
+		mbox-buffer 40 longs erase
+	;
+
+	: get-mbox		( idx -- val )	\ Set the idx'th word in the mbox buffer to val
+		longs mbox-buffer + l@
+	;
+
+	: set-mbox		( val idx -- )	\ Set the idx'th word in the mbox buffer to val
+		longs mbox-buffer + l!
+	;
 
 	0 constant request
 
@@ -1976,24 +1987,6 @@ begin-module mailbox
 	  8 constant prop
 	end-module
 
-	\ Interface to video hardware mailbox
-	begin-module videocore
-
-		begin-module tag
-			$28001 constant setpower
-			$38002 constant setclkrate
-
-			$48003 constant setphywh
-			$48004 constant setvirtwh
-			$48005 constant setdepth
-			$48006 constant setpxlordr
-			$48009 constant setvirtoff
-			$40001 constant getfb
-			$40008 constant getpitch
-
-			$00000 constant last
-		end-module
-
 	  peripheral-base $0000B880 +
 		           constant mbox
 	  mbox $00 + constant read
@@ -2006,9 +1999,9 @@ begin-module mailbox
 	  $80000000 constant response
 	  $80000000 constant full
 	  $40000000 constant empty
+		$00000000 constant last
 
 		: wait-while-full  ( -- ) \ Wait until mbox isn't full
-			." Full wait.." cr
 			begin
 				status l@ full and
 				0=
@@ -2016,7 +2009,6 @@ begin-module mailbox
 		;
 
 		: wait-while-empty ( -- ) \ Wait until mbox isn't empty
-			." Empty wait.." cr
 			begin
 				status l@ empty and
 				0=
@@ -2033,20 +2025,117 @@ begin-module mailbox
 			begin
 				wait-while-empty
 
-				read l@ 0<>
-				mbox-buffer 1 longs + l@ response =
-				and
+				read l@ dup $F and ch::prop =
 			until
-			true
+			$FFFFFFF0 and
 		;
 
-		: get-mbox		( idx -- val )	\ Set the idx'th word in the mbox buffer to val
-			longs mbox-buffer + l@
+	begin-module	clocks
+
+	  #1600000000	constant arm-clock-speed
+	  #3800000000	constant dram-clock-speed
+
+	  $00000000	constant reserved
+		$00000001 constant emmc
+		$00000002 constant uart
+		$00000003 constant arm
+		$00000004 constant core
+		$00000005 constant v3d
+		$00000006 constant h264
+		$00000007 constant isp
+		$00000008 constant sdram
+		$00000009 constant pixel
+		$0000000A constant pwm
+		$0000000B constant hevc
+		$0000000C constant emmc2
+		$0000000D constant m2mc
+		$0000000E constant pixel_bvb
+
+		begin-module tag
+		  $00030047	constant	get-clockrate-measured
+		  $00038002	constant	set-clockrate
+		  $00030004	constant	get-max-clockrate
+		end-module
+
+		: clock-call	( clkid tag -- value )
+			mbox-buffer 40 longs 0 fill
+			8 longs						0 set-mbox
+			mailbox::request	1 set-mbox
+
+			  ( tag )					2 set-mbox
+			4 longs						3 set-mbox
+			1 longs						4 set-mbox
+			  ( clockid )     5 set-mbox
+			0									6 set-mbox
+			last							7 set-mbox
+
+			ch::prop call if
+				6 get-mbox
+			else
+				. ." : Clock call failed" cr
+				abort" clock call failed"
+			then
 		;
 
-		: set-mbox		( val idx -- )	\ Set the idx'th word in the mbox buffer to val
-			longs mbox-buffer + l!
+		: get-max-clockrate	( clockid -- )
+			tag::get-max-clockrate clock-call
 		;
+
+		: get-clockrate	( clockid -- )
+			tag::get-clockrate-measured	clock-call
+		;
+
+		: set-clockrate	( clkid rate -- value )
+			swap
+			mbox-buffer 40 longs 0 fill
+			8 longs						0 set-mbox
+			mailbox::request	1 set-mbox
+
+			tag::set-clockrate 2 set-mbox
+			4 longs						3 set-mbox
+			4 longs						4 set-mbox
+			  ( clockid )     5 set-mbox
+				( rate )				6 set-mbox
+			last							7 set-mbox
+
+			ch::prop call if
+				6 get-mbox
+			else
+				. ." : Clock call failed" cr
+				abort" clock call failed"
+			then
+		;
+
+		arm   dup get-clockrate	swap get-max-clockrate	swap ." ArmClk  : " . ."  cur, " . ." max" cr
+		arm    arm-clock-speed  set-clockrate drop
+		arm   dup get-clockrate	swap get-max-clockrate	swap ." ArmClk  : " . ."  cur, " . ." max" cr
+
+		sdram dup get-clockrate	swap get-max-clockrate	swap ." SdramClk: " . ."  cur, " . ." max" cr
+		sdram	 dram-clock-speed set-clockrate drop
+		sdram dup get-clockrate	swap get-max-clockrate	swap ." SdramClk: " . ."  cur, " . ." max" cr
+
+		core  dup get-clockrate	swap get-max-clockrate	swap ." CoreClk : " . ."  cur, " . ." max" cr
+		emmc2 dup get-clockrate	swap get-max-clockrate	swap ." EMMC2Clk: " . ."  cur, " . ." max" cr
+		uart  dup get-clockrate	swap get-max-clockrate	swap ." UartClk : " . ."  cur, " . ." max" cr
+
+	end-module
+
+
+	\ Interface to video hardware mailbox
+	begin-module videocore
+
+		begin-module tag
+			$28001 constant setpower
+			$38002 constant setclkrate
+
+			$48003 constant setphywh
+			$48004 constant setvirtwh
+			$48005 constant setdepth
+			$48006 constant setpxlordr
+			$48009 constant setvirtoff
+			$40001 constant getfb
+			$40008 constant getpitch
+		end-module
 
 		: init-framebuffer	( -- wid hgt pitch isrgb fbaddr )		\ Init the framebuffer and return its values
 
@@ -2092,7 +2181,7 @@ begin-module mailbox
 			1 longs						32 set-mbox
 			0									33 set-mbox
 
-			tag::last					34 set-mbox
+			mailbox::last			34 set-mbox
 
 			ch::prop	call	if
 				20 get-mbox	32 =
@@ -2202,17 +2291,224 @@ decimal
 ." width           : " framebuffer::width . cr
 ." height          : " framebuffer::height . cr
 
-framebuffer import
-get-ticks
-2 dos-color 0 0 width 1- height 1- box
-4 dos-color 100 100 100 100 box
-9 dos-color 50 50 50 50 box
-10 dos-color 25 25 25 25 box
-get-ticks swap - 1000 / .( Took ) . .(  ms to draw boxes.) cr
-framebuffer unimport
-
 \ The goal of this is to get a minimal implementation of block read/write going on SD card, so we can have actual file I/O.
-\
+begin-module font
+
+8 constant glyph-width
+16 constant glyph-height
+
+.( Loading font...)
+create font-img-data
+$0000000000000000 , $0000000000000000 , $BD8181A5817E0000 , $000000007E818199 ,
+$C3FFFFDBFF7E0000 , $000000007EFFFFE7 , $7F7F7F3600000000 , $00000000081C3E7F ,
+$7F3E1C0800000000 , $0000000000081C3E , $E7E73C3C18000000 , $000000003C1818E7 ,
+$FFFF7E3C18000000 , $000000003C18187E , $3C18000000000000 , $000000000000183C ,
+$C3E7FFFFFFFFFFFF , $FFFFFFFFFFFFE7C3 , $1111111111111F00 , $000000001F111111 ,
+$BD99C3FFFFFFFFFF , $FFFFFFFFFFC399BD , $331E4C5870780000 , $000000001E333333 ,
+$3C666666663C0000 , $0000000018187E18 , $0C0C0CFCCCFC0000 , $00000000070F0E0C ,
+$C6C6C6FEC6FE0000 , $0000000367E7E6C6 , $E73CDB1818000000 , $000000001818DB3C ,
+$1F7F1F0F07030100 , $000000000103070F , $7C7F7C7870604000 , $0000000040607078 ,
+$1818187E3C180000 , $0000000000183C7E , $6666666666660000 , $0000000066660066 ,
+$D8DEDBDBDBFE0000 , $00000000D8D8D8D8 , $6363361C06633E00 , $0000003E63301C36 ,
+$0000000000000000 , $000000007F7F7F7F , $1111111111111F00 , $000000001F111111 ,
+$1818187E3C180000 , $0000000018181818 , $1818181818180000 , $00000000183C7E18 ,
+$7F30180000000000 , $0000000000001830 , $7F060C0000000000 , $0000000000000C06 ,
+$0303000000000000 , $0000000000007F03 , $7F36140000000000 , $0000000000001436 ,
+$3E1C1C0800000000 , $00000000007F7F3E , $3E3E7F7F00000000 , $0000000000081C1C ,
+$0000000000000000 , $0000000000000000 , $18183C3C3C180000 , $0000000018180018 ,
+$0000002466666600 , $0000000000000000 , $36367F3636000000 , $0000000036367F36 ,
+$603E0343633E1818 , $000018183E636160 , $1830634300000000 , $000000006163060C ,
+$3B6E1C36361C0000 , $000000006E333333 , $000000060C0C0C00 , $0000000000000000 ,
+$0C0C0C0C18300000 , $0000000030180C0C , $30303030180C0000 , $000000000C183030 ,
+$FF3C660000000000 , $000000000000663C , $7E18180000000000 , $0000000000001818 ,
+$0000000000000000 , $0000000C18181800 , $7F00000000000000 , $0000000000000000 ,
+$0000000000000000 , $0000000018180000 , $1830604000000000 , $000000000103060C ,
+$6B6B6363361C0000 , $000000001C366363 , $1818181E1C180000 , $000000007E181818 ,
+$0C183060633E0000 , $000000007F630306 , $603C6060633E0000 , $000000003E636060 ,
+$7F33363C38300000 , $0000000078303030 , $603F0303037F0000 , $000000003E636060 ,
+$633F0303061C0000 , $000000003E636363 , $18306060637F0000 , $000000000C0C0C0C ,
+$633E6363633E0000 , $000000003E636363 , $607E6363633E0000 , $000000001E306060 ,
+$0000181800000000 , $0000000000181800 , $0000181800000000 , $000000000C181800 ,
+$060C183060000000 , $000000006030180C , $00007E0000000000 , $000000000000007E ,
+$6030180C06000000 , $00000000060C1830 , $18183063633E0000 , $0000000018180018 ,
+$7B7B63633E000000 , $000000003E033B7B , $7F6363361C080000 , $0000000063636363 ,
+$663E6666663F0000 , $000000003F666666 , $03030343663C0000 , $000000003C664303 ,
+$66666666361F0000 , $000000001F366666 , $161E1646667F0000 , $000000007F664606 ,
+$161E1646667F0000 , $000000000F060606 , $7B030343663C0000 , $000000005C666363 ,
+$637F636363630000 , $0000000063636363 , $18181818183C0000 , $000000003C181818 ,
+$3030303030780000 , $000000001E333333 , $1E1E366666670000 , $0000000067666636 ,
+$06060606060F0000 , $000000007F664606 , $636B7F7F77630000 , $0000000063636363 ,
+$737B7F6F67630000 , $0000000063636363 , $63636363633E0000 , $000000003E636363 ,
+$063E6666663F0000 , $000000000F060606 , $63636363633E0000 , $000070303E7B6B63 ,
+$363E6666663F0000 , $0000000067666666 , $301C0663633E0000 , $000000003E636360 ,
+$1818185A7E7E0000 , $000000003C181818 , $6363636363630000 , $000000003E636363 ,
+$6363636363630000 , $00000000081C3663 , $6B6B636363630000 , $0000000036777F6B ,
+$1C1C3E3663630000 , $000000006363363E , $183C666666660000 , $000000003C181818 ,
+$0C183061637F0000 , $000000007F634306 , $0C0C0C0C0C3C0000 , $000000003C0C0C0C ,
+$1C0E070301000000 , $0000000040607038 , $30303030303C0000 , $000000003C303030 ,
+$0000000063361C08 , $0000000000000000 , $0000000000000000 , $0000FF0000000000 ,
+$0000000000180C0C , $0000000000000000 , $3E301E0000000000 , $000000006E333333 ,
+$66361E0606070000 , $000000003E666666 , $03633E0000000000 , $000000003E630303 ,
+$33363C3030380000 , $000000006E333333 , $7F633E0000000000 , $000000003E630303 ,
+$060F0626361C0000 , $000000000F060606 , $33336E0000000000 , $001E33303E333333 ,
+$666E360606070000 , $0000000067666666 , $18181C0018180000 , $000000003C181818 ,
+$6060700060600000 , $003C666660606060 , $1E36660606070000 , $000000006766361E ,
+$18181818181C0000 , $000000003C181818 , $6B7F370000000000 , $00000000636B6B6B ,
+$66663B0000000000 , $0000000066666666 , $63633E0000000000 , $000000003E636363 ,
+$66663B0000000000 , $000F06063E666666 , $33336E0000000000 , $007830303E333333 ,
+$666E3B0000000000 , $000000000F060606 , $06633E0000000000 , $000000003E63301C ,
+$0C0C3F0C0C080000 , $00000000386C0C0C , $3333330000000000 , $000000006E333333 ,
+$6666660000000000 , $00000000183C6666 , $6B63630000000000 , $00000000367F6B6B ,
+$1C36630000000000 , $0000000063361C1C , $6363630000000000 , $001F30607E636363 ,
+$18337F0000000000 , $000000007F63060C , $180E181818700000 , $0000000070181818 ,
+$1800181818180000 , $0000000018181818 , $18701818180E0000 , $000000000E181818 ,
+$000000003B6E0000 , $0000000000000000 , $63361C0800000000 , $00000000007F6363 ,
+$03030343663C0000 , $00003E60303C6643 , $3333330000330000 , $000000006E333333 ,
+$7F633E000C183000 , $000000003E630303 , $3E301E00361C0800 , $000000006E333333 ,
+$3E301E0000330000 , $000000006E333333 , $3E301E00180C0600 , $000000006E333333 ,
+$3E301E001C361C00 , $000000006E333333 , $0606663C00000000 , $0000003C60303C66 ,
+$7F633E00361C0800 , $000000003E630303 , $7F633E0000630000 , $000000003E630303 ,
+$7F633E00180C0600 , $000000003E630303 , $18181C0000660000 , $000000003C181818 ,
+$18181C00663C1800 , $000000003C181818 , $18181C00180C0600 , $000000003C181818 ,
+$6363361C08006300 , $000000006363637F , $6363361C001C361C , $000000006363637F ,
+$3E06667F00060C18 , $000000007F660606 , $6C6E330000000000 , $00000000761B1B7E ,
+$337F3333367C0000 , $0000000073333333 , $63633E00361C0800 , $000000003E636363 ,
+$63633E0000630000 , $000000003E636363 , $63633E00180C0600 , $000000003E636363 ,
+$33333300331E0C00 , $000000006E333333 , $33333300180C0600 , $000000006E333333 ,
+$6363630000630000 , $001E30607E636363 , $636363633E006300 , $000000003E636363 ,
+$6363636363006300 , $000000003E636363 , $060606663C181800 , $0000000018183C66 ,
+$06060F0626361C00 , $000000003F670606 , $187E183C66660000 , $000000001818187E ,
+$7B33231F33331F00 , $0000000063333333 , $187E181818D87000 , $00000E1B18181818 ,
+$3E301E00060C1800 , $000000006E333333 , $18181C000C183000 , $000000003C181818 ,
+$63633E00060C1800 , $000000003E636363 , $33333300060C1800 , $000000006E333333 ,
+$66663B003B6E0000 , $0000000066666666 , $7B7F6F6763003B6E , $0000000063636373 ,
+$007E007C36363C00 , $0000000000000000 , $003E001C36361C00 , $0000000000000000 ,
+$060C0C000C0C0000 , $000000003E636303 , $037F000000000000 , $0000000000030303 ,
+$607F000000000000 , $0000000000606060 , $0C18336343030300 , $00007C1830613B06 ,
+$0C18336343030300 , $000060607C797366 , $1818180018180000 , $00000000183C3C3C ,
+$1B366C0000000000 , $0000000000006C36 , $6C361B0000000000 , $0000000000001B36 ,
+$2288228822882288 , $2288228822882288 , $55AA55AA55AA55AA , $55AA55AA55AA55AA ,
+$EEBBEEBBEEBBEEBB , $EEBBEEBBEEBBEEBB , $1818181818181818 , $1818181818181818 ,
+$1F18181818181818 , $1818181818181818 , $1F181F1818181818 , $1818181818181818 ,
+$6F6C6C6C6C6C6C6C , $6C6C6C6C6C6C6C6C , $7F00000000000000 , $6C6C6C6C6C6C6C6C ,
+$1F181F0000000000 , $1818181818181818 , $6F606F6C6C6C6C6C , $6C6C6C6C6C6C6C6C ,
+$6C6C6C6C6C6C6C6C , $6C6C6C6C6C6C6C6C , $6F607F0000000000 , $6C6C6C6C6C6C6C6C ,
+$7F606F6C6C6C6C6C , $0000000000000000 , $7F6C6C6C6C6C6C6C , $0000000000000000 ,
+$1F181F1818181818 , $0000000000000000 , $1F00000000000000 , $1818181818181818 ,
+$F818181818181818 , $0000000000000000 , $FF18181818181818 , $0000000000000000 ,
+$FF00000000000000 , $1818181818181818 , $F818181818181818 , $1818181818181818 ,
+$FF00000000000000 , $0000000000000000 , $FF18181818181818 , $1818181818181818 ,
+$F818F81818181818 , $1818181818181818 , $EC6C6C6C6C6C6C6C , $6C6C6C6C6C6C6C6C ,
+$FC0CEC6C6C6C6C6C , $0000000000000000 , $EC0CFC0000000000 , $6C6C6C6C6C6C6C6C ,
+$FF00EF6C6C6C6C6C , $0000000000000000 , $EF00FF0000000000 , $6C6C6C6C6C6C6C6C ,
+$EC0CEC6C6C6C6C6C , $6C6C6C6C6C6C6C6C , $FF00FF0000000000 , $0000000000000000 ,
+$EF00EF6C6C6C6C6C , $6C6C6C6C6C6C6C6C , $FF00FF1818181818 , $0000000000000000 ,
+$FF6C6C6C6C6C6C6C , $0000000000000000 , $FF00FF0000000000 , $1818181818181818 ,
+$FF00000000000000 , $6C6C6C6C6C6C6C6C , $FC6C6C6C6C6C6C6C , $0000000000000000 ,
+$F818F81818181818 , $0000000000000000 , $F818F80000000000 , $1818181818181818 ,
+$FC00000000000000 , $6C6C6C6C6C6C6C6C , $FF6C6C6C6C6C6C6C , $6C6C6C6C6C6C6C6C ,
+$FF18FF1818181818 , $1818181818181818 , $1F18181818181818 , $0000000000000000 ,
+$F800000000000000 , $1818181818181818 , $FFFFFFFFFFFFFFFF , $FFFFFFFFFFFFFFFF ,
+$FF00000000000000 , $FFFFFFFFFFFFFFFF , $0F0F0F0F0F0F0F0F , $0F0F0F0F0F0F0F0F ,
+$F0F0F0F0F0F0F0F0 , $F0F0F0F0F0F0F0F0 , $00FFFFFFFFFFFFFF , $0000000000000000 ,
+$1B3B6E0000000000 , $000000006E3B1B1B , $331B3333331E0000 , $0000000033636363 ,
+$03030363637F0000 , $0000000003030303 , $3636367F00000000 , $0000000036363636 ,
+$180C06637F000000 , $000000007F63060C , $1B1B7E0000000000 , $000000000E1B1B1B ,
+$6666666600000000 , $0000000306063E66 , $18183B6E00000000 , $0000000018181818 ,
+$66663C187E000000 , $000000007E183C66 , $7F6363361C000000 , $000000001C366363 ,
+$36636363361C0000 , $0000000077363636 , $667C30180C780000 , $000000003C666666 ,
+$DBDB7E0000000000 , $0000000000007EDB , $DBDB7E60C0000000 , $0000000003067ECF ,
+$063E06060C380000 , $00000000380C0606 , $636363633E000000 , $0000000063636363 ,
+$7F00007F00000000 , $00000000007F0000 , $187E181800000000 , $00000000FF000018 ,
+$306030180C000000 , $000000007E000C18 , $0C060C1830000000 , $000000007E003018 ,
+$181818D8D8700000 , $1818181818181818 , $1818181818181818 , $000000000E1B1B1B ,
+$7E00181800000000 , $0000000000181800 , $003B6E0000000000 , $0000000000003B6E ,
+$0000001C36361C00 , $0000000000000000 , $1800000000000000 , $0000000000000018 ,
+$0000000000000000 , $0000000000000018 , $373030303030F000 , $00000000383C3636 ,
+$0036363636361B00 , $0000000000000000 , $001F13060C1B0E00 , $0000000000000000 ,
+$3E3E3E3E00000000 , $00000000003E3E3E , $0000000000000000 , $0000000000000000 ,
+
+		: get-glyph-bits ( u -- a b )	\ Gets the 2 cells of img data for glyph u
+			2 * cells font-img-data + 2@
+		;
+
+		: draw-half-glyph-image	(	rgb addr hc -- rgb addr' )
+			8 0 do
+				8 longs 0 do
+					dup 1 and							( rgb addr hc flg )
+					3 pick *
+					swap 1 rshift	swap		( rgb addr hc' rgb|0 )
+					2 pick i + l!					( rgb addr hc' )
+					1 longs +loop
+				( rgb addr hc' )
+				swap	framebuffer::pitch + swap
+			loop
+			drop
+		;
+
+		: draw-glyph	( fgrgb bgrgb x y glyph -- )
+			get-glyph-bits 2>r							( frgb brgb x y )
+			framebuffer::pitch *						( frgb brgb x yoff )
+			swap longs											( frgb brgb yoff xoff )
+			framebuffer::addr + +	\ Calc fb start address
+
+			\ Top glyph word
+			( frgb brgb addr )
+			r> framebuffer::pitch ( frgb brgb addr  x0 pitch ) (draw-hgi)
+			r> framebuffer::pitch ( frgb brgb addr' x1 pitch ) (draw-hgi)
+			2drop drop
+		;
+
+		: draw-chart	( -- )
+			256 0 do
+				i 16 /mod					( col row )
+			  glyph-height * swap					( row*16 col )
+				glyph-width * swap					( x y )
+				i 15 mod 1 +
+				dup framebuffer::dos-color						( x y idx fgc )
+				swap 16 swap - framebuffer::dos-color ( x y fgc bgc )
+				2swap				( fgc bgc x y )
+				i						( fgc bgc x y glyph )
+				draw-glyph
+			loop
+		;
+
+end-module
+
+begin-module screen
+
+	font import
+
+	framebuffer::width font::glyph-width / constant screen-width
+	framebuffer::height font::glyph-height / constant screen-height
+
+	.( The screen is ) screen-width u. .(  x ) screen-height u. .( Characters) cr
+
+	screen-width screen-height * longs buffer: screen-buf
+
+	256 longs buffer: palette
+	palette 256 longs 0 fill
+
+	: set-palette	( col slot -- )
+		longs palette + !
+	;
+
+	: init-palette
+		16 0 do
+			i framebuffer::dos-color i set-palette
+		loop
+	;
+
+	: clear-to	( fgi bgi -- )
+
+	;
+end-module
+
+
+get-ticks
+font::draw-chart
+get-ticks swap - 1000 /
+.( Drew 256 glyphs in ) . .(  ms) cr
 
 \ Print stats
 get-ticks swap -
