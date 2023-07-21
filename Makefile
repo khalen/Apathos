@@ -1,10 +1,11 @@
 export FIRMWARE_DIR	:= firmware
 export IMG_DIR  := $(CURDIR)/images
 export BIN_DIR	:= $(CURDIR)/bin
+export CIRCLE_DIR:= $(CURDIR)/circle
 
-ALL_DIRS		:= $(wildcard */.)
+ALL_DIRS	:= $(wildcard */.)
 DEPLOY_KERNEL	:= chainload
-STUB_IMG		:= armstub
+STUB_IMG	:= armstub
 
 BOOT_MNT := /Volumes/BOOTFS
 BOOT_C    = $(wildcard $(BOOT_MNT))
@@ -17,6 +18,9 @@ $(ALL_DIRS) :
 	@if [ -e $@/Makefile ] ; then \
 		echo "### Running make $(MAKECMDGOALS) in $@..." ; \
 		$(MAKE) -C $@ $(MAKECMDGOALS) ; \
+	fi ; \
+	if [ -e $@/makeall ] ; then \
+		cd $@ ; ./makeall $(MAKECMDGOALS) ; \
 	fi
 
 clean :

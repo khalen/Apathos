@@ -53,7 +53,6 @@ int main(int argc, char **argv)
 
 	for (int cpi = 0; cpi <= 0xFF; cpi++)
 	{
-		uint16_t codepoint = codePage437[cpi];
 		bitmap = stbtt_GetCodepointBitmap(&font, 0, stbtt_ScaleForPixelHeight(&font, FH), codePage437[cpi], &w, &h, &xoff, &yoff);
 
 		// fprintf( stdout, "w: %d h: %d xo: %d yo: %d\n", w, h, xoff, yoff );

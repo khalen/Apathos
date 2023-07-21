@@ -9,6 +9,7 @@ build/
 # Ignore conman binary
 conman/conman
 fithfont/fithfont
+fithfont/fithfont.dSYM/
 a.out
 
 *.o
