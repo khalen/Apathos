@@ -21,5 +21,3 @@ typedef volatile u64   reg64;
 #define GB    (1024 * MB)
 
 #define NULL  ((void *)0)
-
-#define PACKED __attribute__((packed))

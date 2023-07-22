@@ -3,4 +3,4 @@
 -I
 include
 -I
-src/tinyusb/src
+../circle/include

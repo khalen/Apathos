@@ -25,7 +25,7 @@ typedef i64 ssize_t;
 
 #define NULL  0
 
-#define PACKED __attribute__((packed, aligned(4)))
-
+#ifndef offsetof
 #define offsetof(struc, fiel) \
 	__builtin_offsetof(struc, fiel)
+#endif

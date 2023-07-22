@@ -1,20 +1,9 @@
 #include "base_defs.h"
-#include "peripherals/aux.h"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-
-static inline u32 uart_isReadByteReady()
-{
-	return AUX_REGS->MuLsrReg & 0x01;
-}
-
-static inline u32 uart_isWriteByteReady()
-{
-	return AUX_REGS->MuLsrReg & 0x20;
-}
 
 void uart_init();
 

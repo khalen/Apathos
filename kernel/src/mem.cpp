@@ -14,101 +14,7 @@ void *memzero(void *dest, u64 n)
 	return memset(dest, 0, n);
 }
 
-void *memset(void *dest, u64 n, u64 cIn)
-{
-	u8 c = (u8)(cIn & 0xFF);
-
-	u8* bDest = (u8 *) dest;
-	u8* bEnd  = bDest + n;
-
-	while (bDest < bEnd)
-	{
-		*bDest++ = c;
-	}
-
-	return dest;
-}
-
-void *memcpy(void *dest, const void* src, u64 n)
-{
-	u8* bDest = (u8 *) dest;
-	const u8* bSrc= (const u8 *) src;
-	const u8* bSrcEnd = bSrc + n;
-	while (bSrc < bSrcEnd)
-	{
-		*bDest++ = *bSrc++;
-	}
-
-	return dest;
-}
-
-void *memmove(void *dest, const void* src, u64 n)
-{
-	u8* from = (u8*) src;
-	u8* to = (u8*) dest;
-
-	if (from == to || n == 0)
-		return dest;
-	if (to > from && to-from < (int)n) {
-		/* to overlaps with from */
-		/*  <from......>         */
-		/*         <to........>  */
-		/* copy in reverse, to avoid overwriting from */
-		int i;
-		for(i=n-1; i>=0; i--)
-			to[i] = from[i];
-		return dest;
-	}
-	if (from > to && from-to < (int)n) {
-		/* to overlaps with from */
-		/*        <from......>   */
-		/*  <to........>         */
-		/* copy forwards, to avoid overwriting from */
-		size_t i;
-		for(i=0; i<n; i++)
-			to[i] = from[i];
-		return dest;
-	}
-	memcpy(dest, src, n);
-	return dest;
-}
-
-i64 memcmp(const void* av, const void* bv, u64 n)
-{
-	const u8* a = (const u8 *)av;
-	const u8* b = (const u8 *)bv;
-	for (u64 i = 0; i < n; i++)
-	{
-		i64 vv = a[i] - b[i];
-		if (vv != 0ll)
-			return vv;
-	}
-	return 0;
-}
-
-u64 strlen(const char *str)
-{
-	ssize_t i = 0;
-	for (; *str != 0; str++, i++)
-		;
-	return i;
-}
-
-char* strchr(char* str, u64 c)
-{
-	if (str == nullptr)
-		return nullptr;
-
-	char cc = (char)(c & 0xFF);
-	for (; *str != 0; str++)
-	{
-		if (*str == cc)
-			return str;
-	}
-
-	return nullptr;
-}
-
+#if 0
 // MMU linear mapping page table init stuff //
 #define TD_VALID                   (1 << 0)
 #define TD_BLOCK                   (0 << 1)
@@ -223,5 +129,6 @@ void init_mmu()
 	create_block_map(block_tbl, DEVICE_ADDR_START1, DEVICE_ADDR_END1, DEVICE_ADDR_START1);
 #endif
 }
+#endif
 
 }

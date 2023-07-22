@@ -1,3 +1,5 @@
+1 verbose-match !
+
 here
 get-ticks
 
@@ -254,6 +256,9 @@ create run-tests 1 cells allot
 
 :  constant	variable  latest >cfa >body  ! does> @ ;
 : 2constant	2variable latest >cfa >body 2! does> 2@ ;
+
+128 constant tester
+here tester allot
 
 : buffer: ( amt -- addr )
 	create allot align

@@ -28,6 +28,8 @@ hdmi_mode=16
 
 armstub=armstub8.img
 
+gpu_mem=16
+
 enable_jtag_gpio=1
 gpio=22-27=np
 gpio=22-27=a4

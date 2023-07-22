@@ -5,7 +5,7 @@ IMG_DIR     := ../images
 ARM_CC      = /usr/local/opt/llvm/bin/clang
 ARM_LD      = /usr/local/opt/llvm/bin/ld.lld
 ARM_OBJCOPY = /usr/local/opt/llvm/bin/llvm-objcopy
-AFLAGS      = --target=aarch64-elf -mcpu=cortex-a72+nosimd -Iinclude
+AFLAGS      = --target=aarch64-elf -mcpu=cortex-a72 -DGCI=1 -Iinclude
 
 all : armstub8.img install
 

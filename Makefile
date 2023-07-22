@@ -15,6 +15,12 @@ BOOT_C    = $(wildcard $(BOOT_MNT))
 all clean install default : $(ALL_DIRS)
 
 $(ALL_DIRS) :
+ifeq (install,$(MAKECMDGOALS))
+	@if [ -e $@/Makefile ] ; then \
+		echo "### Running make $(MAKECMDGOALS) in $@..." ; \
+		$(MAKE) -C $@ $(MAKECMDGOALS) ; \
+	fi
+else
 	@if [ -e $@/Makefile ] ; then \
 		echo "### Running make $(MAKECMDGOALS) in $@..." ; \
 		$(MAKE) -C $@ $(MAKECMDGOALS) ; \
@@ -22,6 +28,7 @@ $(ALL_DIRS) :
 	if [ -e $@/makeall ] ; then \
 		cd $@ ; ./makeall $(MAKECMDGOALS) ; \
 	fi
+endif
 
 clean :
 	@rm -rf $(IMG_DIR)/*

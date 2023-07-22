@@ -2681,11 +2681,10 @@ return_stack:
 .global fith_boot
 .global fith_abort
 fith_boot:
+	savevar CP, x0
+
 	mov	x0, sp
 	savevar	SP, x0
-
-	ldr	x0, =0x400000	// Initial rtn stack and DS
-	savevar	CP, x0
 
 fith_abort:
 	ldr	dsp, =data_stack_top
