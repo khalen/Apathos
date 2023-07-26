@@ -17,3 +17,5 @@ a.out
 
 *.img
 *.log
+*.lst
+*.map

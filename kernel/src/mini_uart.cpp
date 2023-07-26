@@ -2,6 +2,7 @@
 #include "base_defs.h"
 #include "mem.h"
 #include "printf.h"
+#include "kernel.h"
 #include <circle/devicenameservice.h>
 #include <circle/serial.h>
 
@@ -14,22 +15,25 @@ static CDevice  *pSerial = nullptr;
 
 void uart_putb(u8 b)
 {
-    pSerial->Write(&b, 1);
+    while (pSerial->Write(&b, 1) < 1)
+    {
+        gKernel.Timer.SimpleMsDelay(1);
+    }
 }
+
 u8 uart_getb()
 {
     u8 b = 0;
-    while (pSerial->Read(&b, 1) == 0)
-        ;
+    while (pSerial->Read(&b, 1) < 1)
+    {
+        gKernel.Timer.SimpleMsDelay(1);
+    }
     return b;
 }
 
 char uart_getc()
 {
-    u8 b = 0;
-    while (pSerial->Read(&b, 1) == 0)
-        ;
-    return (char)b;
+    return (char)(uart_getb());
 }
 
 void uart_putc(const char c)
@@ -38,6 +42,7 @@ void uart_putc(const char c)
         uart_putb(10);
     uart_putb(c);
 }
+
 void uart_write(const void *buffer, u64 len)
 {
     const u8 *buf = (const u8 *)buffer;
@@ -47,6 +52,7 @@ void uart_write(const void *buffer, u64 len)
         len--;
     }
 }
+
 u64 uart_read(void *buffer, u64 len)
 {
     u8 *buf = (u8 *)buffer;

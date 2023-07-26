@@ -1,6 +1,7 @@
 // -*-  tab-width 4; -*-
 
 #include "base_defs.h"
+#include "circle/logger.h"
 #include "kernel.h"
 #include "linenoise.h"
 #include "mem.h"
@@ -9,11 +10,12 @@
 #include "printf.h"
 #include "timer.h"
 #include "utils.h"
+#include <circle/new.h>
 
 CKernel gKernel;
 
 CKernel::CKernel()
-	: CpuThrottle(TCPUSpeed::CPUSpeedMaximum), Timer(&Interrupt),
+	: CpuThrottle(TCPUSpeed::CPUSpeedMaximum), Serial(), Timer(&Interrupt),
 	  Logger(4, &Timer)
 {
 }
@@ -25,7 +27,7 @@ bool CKernel::Initialize()
 {
 	bool ok = true;
 
-	ok = Serial.Initialize(921600);
+	ok = ok && Serial.Initialize(921600);
 	if (ok)
 	{
 		CDevice *target = DeviceNameService.GetDevice( Options.GetLogDevice(), false );
@@ -120,18 +122,15 @@ int main(void)
 		}
 	}
 
-	gKernel.Serial.RegisterMagicReceivedHandler("\x12", magicCallback);
-
 	uart_init();
+
 	u64 excLevel = get_el();
 	printf("\nHello from Apathos. Running at exception level: %d (%s)\n", excLevel, excLevelNames[excLevel]);
 	printf("Initializing kernel...\n");
 
 	printf("Booting FITH v.-3.1415927\n");
-	gKernel.Timer.SimpleMsDelay(10000);
-	printf("Booting FITH v.-3.1415927\n");
 
-	u8	*fithMem = new u8[1024 * 1024 * 1024];
+	u8	*fithMem = new (HEAP_HIGH) u8[1024 * 1024 * 1024];
 
 	int loopCnt = 0;
 	while (loopCnt < 10)
@@ -144,3 +143,4 @@ int main(void)
 	rebootSystem();
 }
 }
+

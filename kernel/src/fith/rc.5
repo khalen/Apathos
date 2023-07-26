@@ -1,4 +1,4 @@
-1 verbose-match !
+0 verbose-match !
 
 here
 get-ticks
@@ -133,6 +133,95 @@ create run-tests 1 cells allot
   then
 ; IMMEDIATE
 
+1024 buffer: ss-buf
+
+: (append-ss-chr)	( c -- ) \ Append c to ss-buf and update its count
+	ss-buf	dup @	cell+ + swap c!
+	1 ss-buf	+!
+;
+
+: (hex>) ( c -- u flag )	\ Convert a single 0-9|A-F|a-f chr to 0-15 value
+	dup '0' >= over '9' <= and if
+		'0' - true
+	else
+		dup 'A' >= over 'Z' <= and if
+			'A' - 10 + true
+		else
+			dup 'a' >= over 'z' <= and if
+				'a' - 10 + true
+			else
+				0 false
+			then
+		then
+	then
+;
+
+: (2hex) ( -- u )		\ Parse 2 chars from the input stream and convert to a 1 byte hex digit
+	inch if
+		(hex>) if
+			16 *
+			inch if
+				(hex>) if
+					+ exit
+				then
+			then
+		then
+	then
+	abort" Bad \x hex pair in string"
+;
+
+: (handle-bksp) ( "c" -- )
+	inch if
+		case
+			'a' of	7		endof
+			'b' of	8		endof
+			'e' of	27	endof
+			'f' of	12	endof
+			'l' of	10	endof
+			'm' of	13 (append-ss-chr) 10	endof
+			'n' of	13 (append-ss-chr) 10	endof
+			'q' of	34	endof
+			'r' of	13	endof
+			't' of	9		endof
+			'v' of	11	endof
+			'z' of	0		endof
+			'"' of	34	endof
+			'x' of	(2hex)	endof
+			'\' of	'\'	endof
+			dup	\ Default
+		endcase
+		(append-ss-chr)
+	else
+		-21 throw
+	then
+;
+
+: s\"	( "ccc<quote>" -- c: caddr u ) \ Process an escaped string at compile time
+	begin
+		inch if
+			dup '"' = if
+				drop
+				ss-buf dup @ over cell+ swap
+				state @ if
+					[compile] sliteral
+				then
+				exit
+			then
+
+			dup '\' = if
+				drop
+				(handle-bksp)
+			else
+				(append-ss-chr)
+			then
+	again
+;
+
+
+
+
+
+
 \ 0= if <perror> then ...
 : abort"
   *compile 0branch
@@ -213,11 +302,14 @@ create run-tests 1 cells allot
 : w,	( half -- )	here [ 1 wrds ] literal allot w! ;
 : l,	( word -- )	here [ 1 longs ] literal allot l! ;
 
-( addr u -- ) \ Compile the given string directly at HERE
+( addr u -- ) \ Compile the given string directly at HERE. NOTE: Flushes
+\ dcache and icache assuming we are generating actual compiled code!
 : compile-str
   here				( addr u haddr )
   over allot align	( addr u haddr )
-  swap cmove
+	swap 2dup 2>r cmove
+	2r> dcache-clean
+	icache-flush
 ;
 
 : *emit-next 	   $next	 compile-str ;
@@ -228,7 +320,7 @@ create run-tests 1 cells allot
 \ then emit a code sequence causing a jump from that word to the code sequence following the does>.
 : does>
   postpone  *fix-cfa
-  *emit-doesbody
+	*emit-doesbody
 ; IMMEDIATE
 
 : hide-name
@@ -256,9 +348,6 @@ create run-tests 1 cells allot
 
 :  constant	variable  latest >cfa >body  ! does> @ ;
 : 2constant	2variable latest >cfa >body 2! does> 2@ ;
-
-128 constant tester
-here tester allot
 
 : buffer: ( amt -- addr )
 	create allot align
@@ -420,6 +509,8 @@ here pad-size allot value pad
 	type
   then
 ; IMMEDIATE
+
+
 
 \ **** Exceptions
 cr .( Exceptions...)
@@ -1965,7 +2056,8 @@ $FE000000 constant	peripheral-base
 begin-module mailbox
 	align32
 
-	40 longs buffer: mbox-buffer
+	0 get-coherent-pg constant mbox-buffer
+
 	: clear-mbox-buffer ( -- )
 		mbox-buffer 40 longs erase
 	;
@@ -2021,6 +2113,8 @@ begin-module mailbox
 		;
 
 		: call ( byte -- )  \ Issue a video mb request, then wait until there is a reply
+			data-sync-fence
+
 			wait-while-full
 
 			\ Write command
@@ -2030,7 +2124,9 @@ begin-module mailbox
 			begin
 				wait-while-empty
 
-				read l@ dup $F and ch::prop =
+				read l@ dup
+				data-mem-fence
+				$F and ch::prop =
 			until
 			$FFFFFFF0 and
 		;
@@ -2111,17 +2207,9 @@ begin-module mailbox
 			then
 		;
 
-		arm   dup get-clockrate	swap get-max-clockrate	swap ." ArmClk  : " . ."  cur, " . ." max" cr
-		arm    arm-clock-speed  set-clockrate drop
-		arm   dup get-clockrate	swap get-max-clockrate	swap ." ArmClk  : " . ."  cur, " . ." max" cr
-
-		sdram dup get-clockrate	swap get-max-clockrate	swap ." SdramClk: " . ."  cur, " . ." max" cr
-		sdram	 dram-clock-speed set-clockrate drop
-		sdram dup get-clockrate	swap get-max-clockrate	swap ." SdramClk: " . ."  cur, " . ." max" cr
-
-		core  dup get-clockrate	swap get-max-clockrate	swap ." CoreClk : " . ."  cur, " . ." max" cr
-		emmc2 dup get-clockrate	swap get-max-clockrate	swap ." EMMC2Clk: " . ."  cur, " . ." max" cr
-		uart  dup get-clockrate	swap get-max-clockrate	swap ." UartClk : " . ."  cur, " . ." max" cr
+		arm   dup get-clockrate	swap get-max-clockrate	swap ." ArmClk  : " 10 u.r ."  cur, " 10 u.r ."  max" cr
+		core  dup get-clockrate	swap get-max-clockrate	swap ." CoreClk : " 10 u.r ."  cur, " 10 u.r ."  max" cr
+		emmc2 dup get-clockrate	swap get-max-clockrate	swap ." EMMC2Clk: " 10 u.r ."  cur, " 10 u.r ."  max" cr
 
 	end-module
 
@@ -2211,7 +2299,7 @@ begin-module mailbox
 
 end-module
 
-.( Initializing framebuffer...)
+.( Initializing framebuffer...) cr
 mailbox::videocore::init-framebuffer
 
 begin-module framebuffer
@@ -2302,7 +2390,7 @@ begin-module font
 8 constant glyph-width
 16 constant glyph-height
 
-.( Loading font...)
+.( Loading font...) cr
 create font-img-data
 $0000000000000000 , $0000000000000000 , $BD8181A5817E0000 , $000000007E818199 ,
 $C3FFFFDBFF7E0000 , $000000007EFFFFE7 , $7F7F7F3600000000 , $00000000081C3E7F ,
@@ -2437,22 +2525,8 @@ $3E3E3E3E00000000 , $00000000003E3E3E , $0000000000000000 , $0000000000000000 ,
 			2 * cells font-img-data + 2@
 		;
 
-		: draw-half-glyph-image	(	rgb addr hc -- rgb addr' )
-			8 0 do
-				8 longs 0 do
-					dup 1 and							( rgb addr hc flg )
-					3 pick *
-					swap 1 rshift	swap		( rgb addr hc' rgb|0 )
-					2 pick i + l!					( rgb addr hc' )
-					1 longs +loop
-				( rgb addr hc' )
-				swap	framebuffer::pitch + swap
-			loop
-			drop
-		;
-
-		: draw-glyph	( fgrgb bgrgb x y glyph -- )
-			get-glyph-bits 2>r							( frgb brgb x y )
+		: draw-glyph	( fgrgb bgrgb glyph x y -- )
+			rot get-glyph-bits 2>r					( frgb brgb x y  r: gh gl )
 			framebuffer::pitch *						( frgb brgb x yoff )
 			swap longs											( frgb brgb yoff xoff )
 			framebuffer::addr + +	\ Calc fb start address
@@ -2489,11 +2563,12 @@ begin-module screen
 
 	.( The screen is ) screen-width u. .(  x ) screen-height u. .( Characters) cr
 
-	screen-width screen-height * longs buffer: screen-buf
+	screen-width screen-height *       buffer: screen-buf
+	screen-width screen-height * longs buffer: fgcol-buf
+	screen-width screen-height * longs buffer: bgcol-buf
 
 	256 longs buffer: palette
 	palette 256 longs 0 fill
-
 	: set-palette	( col slot -- )
 		longs palette + !
 	;
@@ -2504,16 +2579,246 @@ begin-module screen
 		loop
 	;
 
-	: clear-to	( fgi bgi -- )
+	0 value x0	0 value y0
+	0 value x1  0 value y1
+	0 value chr
+	0 value fg	0 value bg
 
+	: scr-coord-addr ( x y -- addr )
+		screen-width * + screen-buf +
 	;
+
+	: colbuf-addr ( addr x y -- addr' )
+		screen-width * + longs +
+	;
+
+	: fgcol-addr ( x y -- addr )
+		fgcol-buf -rot colbuf-addr
+	;
+
+	: bgcol-addr ( x y -- addr )
+		bgcol-buf -rot colbuf-addr
+	;
+
+	: scr@		( x y -- chr )
+		scr-coord-addr c@
+	;
+	: scr!		( chr x y -- )
+		scr-coord-addr c!
+	;
+
+	: fgcol@	( x y -- col )
+		fgcol-addr l@
+	;
+	: fgcol!	( rgbcol x y -- )
+		fgcol-addr l!
+	;
+
+	: bgcol@	( x y -- col )
+		bgcol-addr l@
+	;
+
+	: bgcol!	( bgcol x y -- )
+		bgcol-addr l!
+	;
+
+	: (do-scr-rect)		( xt -- )	\ Run xt for each cell in the rect stored in x0, y0, x1, y1
+		y1 y0 ?do
+			x1 x0 ?do
+				dup								( xt xt )
+				i j rot execute		( xt xt soff )
+			loop
+		loop
+		drop
+	;
+
+	variable cur-fg-col
+	variable cur-bg-col
+
+	: scr-fill-rect	( chr x y wid hgt -- )
+		rot		( .. wid hgt y )
+		swap  over + ( ... x wid y0 y1 )
+		to y1
+		to y0
+
+		over + to x1
+		to x0
+
+		to chr
+
+		[: chr -rot scr!  ;] (do-scr-rect)
+		[: cur-bg-col @ -rot bgcol! ;] (do-scr-rect)
+		[: cur-fg-col @ -rot fgcol! ;] (do-scr-rect)
+	;
+
+	: scr>xels ( x y -- x' y' )
+		font::glyph-height * swap font::glyph-width * swap
+	;
+
+	: paint-chr ( x y -- )
+		2>r
+		2r@ fgcol@
+		2r@ bgcol@
+		2r@ scr@
+		2r>
+
+		scr>xels
+		font::draw-glyph
+	;
+
+	: paint-screen	( -- )
+		screen-height 0 do
+			screen-width 0 do
+				i j paint-chr
+			loop
+		loop
+	;
+
+	: set-chr-colors	( fgcol bgcol chr x y -- )
+		2dup 2>r
+		scr!
+		2r@ bgcol!
+		2r> fgcol!
+	;
+
+	: set-fg	( fgcol -- )
+		cur-fg-col !
+	;
+
+	: set-bg	( bgcol -- )
+		cur-bg-col !
+	;
+
+	: set-fg-bg		( fgcol bgcol -- )
+		set-bg
+		set-fg
+	;
+
+	: set-chr ( chr x y -- )
+		2>r >r
+		cur-fg-col @ cur-bg-col @
+		r> 2r>
+		set-chr-colors
+	;
+
+	: clear	( -- )
+		bl
+		0 0 screen-width screen-height
+		scr-fill-rect
+	;
+
+	variable cur-x		0 cur-x !
+	variable cur-y		0 cur-y !
+
+	: home ( -- )
+		0 dup cur-x ! cur-y !
+	;
+
+	: goto ( x y -- )
+		cur-y ! cur-x !
+	;
+
+	\ Clear to the end of the current line.
+	: clear-eol ( -- )
+		cur-y @
+		cur-x screen-width ?do
+			bl over i swap set-chr
+		loop
+	;
+
+	: clear-eos ( -- )
+		bl
+		cur-x @ dup screen-width swap - ( bl x wid )
+		cur-y @ dup screen-height swap - ( bl x wid y hgt )
+		rot swap		( bl x y wid hgt )
+		scr-fill-rect
+	;
+
+	: print ( addr u -- )		\ Write text to the screen at cur x & y, updating
+		screen-width cur-x @ - min	\ Clip len if would pass the right of the screen
+		dup 0 ?do								( addr u )
+			over i + c@					( addr u c )
+			cur-x @ i + cur-y @ ( addr c x y )
+			set-chr
+		loop
+		cur-x +! drop
+	;
+
+	: print-at ( x y addr u -- )
+		2swap cur-y ! cur-x !
+		print
+	;
+
 end-module
 
+begin-module random
+	variable randstate		0 randstate !
+
+	#2862933555777941757 constant multiplier
+	#3037000493					 constant addend
+
+	: seed ( v -- )
+		randstate !
+	;
+
+	\ Return a 56 bit random number
+	: next ( -- rval )
+		randstate @
+		multiplier *
+		addend +
+		dup randstate !
+		8 rshift
+	;
+
+	: range	( min max -- )
+		over -
+		next swap mod +
+	;
+
+end-module
+
+: do-for-millis ( ms xt -- )
+	swap 1000 * get-ticks + >r		( xt  r: ms )
+	0
+	begin
+		r@ get-ticks >
+	while
+		1+
+		over execute
+	repeat
+	r> drop
+;
+
+run-tests @ [if]
+random import
 
 get-ticks
 font::draw-chart
-get-ticks swap - 1000 /
-.( Drew 256 glyphs in ) . .(  ms) cr
+get-ticks swap -
+.( Drew 256 glyphs in ) . .(  us) cr
+
+screen::clear
+screen::paint-screen
+
+: randprint
+	0 screen::screen-width range
+	0 screen::screen-height range
+	next next screen::set-fg-bg
+	s" Hello!"
+	screen::print-at
+	screen::paint-screen
+;
+
+: testrandprint
+	2000 ['] randprint do-for-millis
+	." Able to do " . ."  iterations of print+update in 2 seconds." cr
+;
+
+testrandprint
+drop
+
+random unimport
+[then]
 
 \ Print stats
 get-ticks swap -

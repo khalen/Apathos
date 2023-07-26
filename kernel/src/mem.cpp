@@ -5,6 +5,7 @@
 #include "mm.h"
 #include "peripherals/base.h"
 #include "printf.h"
+#include <circle/memory.h>
 
 extern "C"
 {
@@ -87,7 +88,14 @@ void create_block_map( u64 pmd, u64 vstart, u64 vend, u64 pa)
 		vstart++;
 	} while(vstart <= vend);
 }
+#endif
 
+u64 getCoherentPage(u64 page)
+{
+	return (u64)(CMemorySystem::GetCoherentPage(page));
+}
+
+#if 0
 u64 id_pgd_addr();
 
 void init_mmu()

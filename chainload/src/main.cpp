@@ -23,7 +23,6 @@ CCPUThrottle		sCpuThrottle(TCPUSpeed::CPUSpeedMaximum);
 CDeviceNameService	sNameService;
 CInterruptSystem	sInterrupts;
 CSerialDevice		sSerial;
-CScreenDevice		sScreen(1020, 768);
 CLogger				sLogger(4, nullptr);
 CTimer				sTimer(&sInterrupts);
 

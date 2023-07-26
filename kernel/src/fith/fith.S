@@ -113,10 +113,16 @@ scw5	.req	w28
 
 // This is the implementation of NEXT, implemented as a macro with optional wrapper so we can indirectly
 // "assemble" it into other words without having to keep it in sync in more than one place.
+	#if 0
 .macro	next
 	ldr	x0, [fip], #8
 	ldr	x1, [x0]
 	br	x1
+.endm
+	#endif
+
+.macro next
+	b _NEXT
 .endm
 
 // ** Word flag bits
@@ -2588,6 +2594,35 @@ defword ASMNEXT, "$next"
 	fw	LIT, _NEXT
 	fw	LIT, next_impl_size
 	fw	EXIT
+
+// ( addr len -- ) clean the dcache from addr to addr + len. Necessary around does> and code - end-code, any machine code generating words.
+defcode	DCACHECLEAN, "dcache-clean"
+	pop2	x0, x1
+	call	cleanInvalidateDCacheRange
+	next
+
+// ( -- ) Flush and invalidate the icache
+defcode ICACHEINV, "icache-flush"
+	ic	iallu
+	next
+
+// ( -- ) Flush and invalidate the icache
+defcode DATAMEMFENCE, "data-mem-fence"
+	dmb	sy
+	next
+
+// ( -- ) Flush and invalidate the icache
+defcode DATASYNCFENCE, "data-sync-fence"
+	dmb	sy
+	next
+
+// ( len -- addr u )
+defcode	GETCPAGE, "get-coherent-pg"
+	pop	x0
+	call	getCoherentPage
+	push	x0
+	next
+
 //
 defword RC, "*rc"
 	fw	LIT, _binary_src_fith_rc_5_start
@@ -2681,7 +2716,7 @@ return_stack:
 .global fith_boot
 .global fith_abort
 fith_boot:
-	savevar CP, x0
+	savevar	CP, x0
 
 	mov	x0, sp
 	savevar	SP, x0
