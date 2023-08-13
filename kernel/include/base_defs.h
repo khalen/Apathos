@@ -18,6 +18,9 @@ typedef volatile u64   reg64;
 
 typedef u64 size_t;
 typedef i64 ssize_t;
+typedef u64 uintptr_t;
+typedef i64 ptrdiff_t;
+typedef i64 intptr_t;
 
 #define KB    1024
 #define MB    (1024 * KB)

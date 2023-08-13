@@ -4,7 +4,7 @@ FIRMWARE_DIR = ../firmware
 BOOT_MNT     = /Volumes/BOOTFS
 CIRCLEHOME   = ../circle
 
-INCLUDE      += -Iinclude
+INCLUDE      += -Iinclude -I$(CIRCLEHOME)/addon
 
 all : kernel8.img
 
@@ -33,7 +33,8 @@ DEPLOY_FILES  = $(wildcard $(FIRMWARE_DIR)/*.*)
 OVERLAY_FILES = $(wildcard $(FIRMWARE_DIR)/overlays/*.*)
 
 OBJS = $(OBJ_FILES)
-LIBS = $(CIRCLEHOME)/lib/libcircle.a $(CIRCLEHOME)/lib/usb/libusb.a
+LIBS = $(CIRCLEHOME)/lib/libcircle.a $(CIRCLEHOME)/lib/usb/libusb.a $(CIRCLEHOME)/addon/fatfs/libfatfs.a \
+		$(CIRCLEHOME)/addon/SDCard/libsdcard.a $(CIRCLEHOME)/lib/input/libinput.a $(CIRCLEHOME)/lib/fs/libfs.a
 
 kernel8.img : kernel8-rpi4.img
 	@echo "Obj files: $(OBJ_FILES)"

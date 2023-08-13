@@ -52,6 +52,12 @@ scw5	.req	w28
 	ldp	x29, x30, [sp], #32
 .endm
 
+.macro	callreg	reg
+	stp	x29, x30, [sp, #-32]!
+	blr	\reg
+	ldp	x29, x30, [sp], #32
+.endm
+
 // Push and pop to the return stack
 .macro	pushrsp	reg
 	str	\reg, [rsp, #-8]!
@@ -2389,7 +2395,7 @@ defcode TYPE, "type"
 	ble	2f
 
 	ldrb	w0, [scx3], #1
-	call	uart_putc
+	call	uart_putb
 	sub	scx4, scx4, #1
 	b	1b
 
@@ -2621,6 +2627,41 @@ defcode	GETCPAGE, "get-coherent-pg"
 	pop	x0
 	call	getCoherentPage
 	push	x0
+	next
+
+defcode REBOOT, "reboot"
+	call	rebootSystem
+	next
+
+// ( arg0 .. argn n scnum -- rv )
+defcode SYSCALL, "*syscall"
+	pop2	x11, x10
+	cmp	x11, #8
+	blt	1f
+	mov	x11, #8
+
+	// Load nargs registers in c ABI order - indexing backwards from 0, so that 1 arg = x0 popped ... 8 args = x7 - x0
+1: 	ldr	x12, =2f
+	sub	x12, x12, x11, LSL #2		// Index insns backwards according to the number of args we need to load in regs.
+	br	x12
+
+	pop	x7
+	pop	x6
+	pop	x5
+	pop	x4
+	pop	x3
+	pop	x2
+	pop	x1
+	pop	x0
+2:	nop	// regs loaded, make the call
+
+	adrp	x12, syscall_table
+	add	x12, x12, :lo12:syscall_table
+	add	x12, x12, x10, LSL #3			// Index to right call
+	ldr	x12, [x12]
+	callreg	x12
+	push	x0
+
 	next
 
 //

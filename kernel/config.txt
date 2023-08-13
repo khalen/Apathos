@@ -4,21 +4,18 @@
 #uncomment to overclock the arm. 700 MHz is the default.
 #arm_freq=800
 
-# Enable DRM VC4 V3D driver
-dtoverlay=vc4-kms-v3d-pi4
 max_framebuffers=2
 
 # Run in 64-bit mode
 arm_64bit=1
-
-# Disable compensation for displays with overscan
-disable_overscan=1
 
 # For consistent miniurt baud rate
 core_freq_min=500
 
 # Run as fast as firmware / board allows
 arm_boost=1
+
+gpu_mem=16
 
 [HDMI:0]
 hdmi_mode=16

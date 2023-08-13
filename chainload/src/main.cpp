@@ -15,16 +15,14 @@
 #define MIN_KERNEL_SIZE		32
 #define MAX_KERNEL_SIZE		2 * 1024 * 1024	/* 2 mb should be plenty? */
 
-#define TIMEOUT				3
+#define TIMEOUT			3
 
 CKernelOptions		sOptions;
 CExceptionHandler	sExceptionHandler;
-CCPUThrottle		sCpuThrottle(TCPUSpeed::CPUSpeedMaximum);
 CDeviceNameService	sNameService;
 CInterruptSystem	sInterrupts;
 CSerialDevice		sSerial;
-CLogger				sLogger(4, nullptr);
-CTimer				sTimer(&sInterrupts);
+CTimer			sTimer(&sInterrupts);
 
 extern "C"
 {
@@ -74,10 +72,8 @@ int main(void)
 	u32 size = 0;
 	u8* kbuffer = new u8[MAX_KERNEL_SIZE];
 	u8 *kernel = kbuffer;
-	sInterrupts.Initialize();
 	sSerial.Initialize(921600);
-	sLogger.Initialize(&sSerial);
-	sCpuThrottle.DumpStatus(true);
+	sInterrupts.Initialize();
 	sTimer.Initialize();
 
 	uart_puts("Booting chainloader from SDCard...\r\n");
@@ -92,7 +88,9 @@ int main(void)
 
 		if (size > 0xFF)
 		{
-			sTimer.SimpleMsDelay(500);
+			for (int i = 0; i < 100000000; i++)
+				asm volatile("nop");
+
 			continue;
 		}
 
@@ -120,7 +118,8 @@ int main(void)
 		*kernel++ = uart_getb();
 	}
 
-	#if 0
+	#if 1
+	uart_puts("Waiting for space...\r\n");
 	while(1)
 	{
 		if (uart_getb_notimeout() == ' ')
@@ -129,6 +128,9 @@ int main(void)
 	#endif
 
 	EnableChainBoot(kbuffer, size);
+	sTimer.~CTimer();
+	sInterrupts.~CInterruptSystem();
+	sSerial.~CSerialDevice();
 
 	return EXIT_REBOOT;
 }

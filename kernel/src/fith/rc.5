@@ -17,7 +17,7 @@ create run-tests 1 cells allot
 0 run-tests !
 
 : .( ')' parse type ; IMMEDIATE
-.( Booting from internal rc.5...)
+.( Booting from internal rc.5...) cr
 
 : ( ')' parse 2drop ; IMMEDIATE
 
@@ -119,6 +119,11 @@ create run-tests 1 cells allot
 	resolve-offset
 ; IMMEDIATE
 
+: again
+	*compile branch
+	here - ,
+; IMMEDIATE
+
 \ RECURSE makes a recursive call to the word that's currently being compiled.
 \   Get the latest word created, move to its cfa, and compile that
 : recurse
@@ -132,95 +137,6 @@ create run-tests 1 cells allot
 	[compile] sliteral
   then
 ; IMMEDIATE
-
-1024 buffer: ss-buf
-
-: (append-ss-chr)	( c -- ) \ Append c to ss-buf and update its count
-	ss-buf	dup @	cell+ + swap c!
-	1 ss-buf	+!
-;
-
-: (hex>) ( c -- u flag )	\ Convert a single 0-9|A-F|a-f chr to 0-15 value
-	dup '0' >= over '9' <= and if
-		'0' - true
-	else
-		dup 'A' >= over 'Z' <= and if
-			'A' - 10 + true
-		else
-			dup 'a' >= over 'z' <= and if
-				'a' - 10 + true
-			else
-				0 false
-			then
-		then
-	then
-;
-
-: (2hex) ( -- u )		\ Parse 2 chars from the input stream and convert to a 1 byte hex digit
-	inch if
-		(hex>) if
-			16 *
-			inch if
-				(hex>) if
-					+ exit
-				then
-			then
-		then
-	then
-	abort" Bad \x hex pair in string"
-;
-
-: (handle-bksp) ( "c" -- )
-	inch if
-		case
-			'a' of	7		endof
-			'b' of	8		endof
-			'e' of	27	endof
-			'f' of	12	endof
-			'l' of	10	endof
-			'm' of	13 (append-ss-chr) 10	endof
-			'n' of	13 (append-ss-chr) 10	endof
-			'q' of	34	endof
-			'r' of	13	endof
-			't' of	9		endof
-			'v' of	11	endof
-			'z' of	0		endof
-			'"' of	34	endof
-			'x' of	(2hex)	endof
-			'\' of	'\'	endof
-			dup	\ Default
-		endcase
-		(append-ss-chr)
-	else
-		-21 throw
-	then
-;
-
-: s\"	( "ccc<quote>" -- c: caddr u ) \ Process an escaped string at compile time
-	begin
-		inch if
-			dup '"' = if
-				drop
-				ss-buf dup @ over cell+ swap
-				state @ if
-					[compile] sliteral
-				then
-				exit
-			then
-
-			dup '\' = if
-				drop
-				(handle-bksp)
-			else
-				(append-ss-chr)
-			then
-	again
-;
-
-
-
-
-
 
 \ 0= if <perror> then ...
 : abort"
@@ -513,7 +429,7 @@ here pad-size allot value pad
 
 
 \ **** Exceptions
-cr .( Exceptions...)
+.( Exceptions...) cr
 
 variable _handler 0 _handler !
 
@@ -569,8 +485,61 @@ variable _handler 0 _handler !
   swap !
 ; IMMEDIATE
 
+\ ** Assertions
+: averts
+	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
+	?dup 0= if
+		type ' ' emit true abort"  averts?"
+	then
+	drop
+	nip nip
+	state @ if
+		postpone 0=
+		postpone 0branch
+		here 0 ,
+		swap postpone literal
+	  postpone execute
+		-20 postpone literal
+		postpone throw
+		here over - swap !
+	else
+		swap 0= if
+			execute
+			-20 throw
+		else
+			drop
+		then
+	then
+; IMMEDIATE
+
+: triggers		( flag "<name>" -- )
+	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
+	?dup 0= if
+		type ' ' emit true abort"  triggers?"
+	then
+	drop
+	nip nip
+	state @ if
+		postpone 0<>
+		postpone 0branch
+		here 0 ,
+		swap postpone literal
+		 postpone execute
+		-20 postpone literal
+		postpone throw
+		here over - swap !
+	else
+		swap 0<> if
+			execute
+			-20 throw
+		else
+			drop
+		then
+	then
+; IMMEDIATE
+
 \ *** Printing numbers
-cr .( Printing... )
+.( Printing... ) cr
 
 : cells+ ( x n -- x+n cells )	cells + ;
 
@@ -957,59 +926,6 @@ variable basehold
 : .2s base @ basehold ! 2 base ! .s basehold @ base ! ;
 : .xs base @ basehold ! hex .s basehold @ base ! ;
 
-\ ** Assertions
-: averts
-	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
-	?dup 0= if
-		type ' ' emit true abort"  averts?"
-	then
-	drop
-	nip nip
-	state @ if
-		postpone 0=
-		postpone 0branch
-		here 0 ,
-		swap postpone literal
-	  postpone execute
-		-20 postpone literal
-		postpone throw
-		here over - swap !
-	else
-		swap 0= if
-			execute
-			-20 throw
-		else
-			drop
-		then
-	then
-; IMMEDIATE
-
-: triggers		( flag "<name>" -- )
-	parse-word 2dup find-word	\ ( -- addr u 0 | xt 1 | xt -1 )
-	?dup 0= if
-		type ' ' emit true abort"  triggers?"
-	then
-	drop
-	nip nip
-	state @ if
-		postpone 0<>
-		postpone 0branch
-		here 0 ,
-		swap postpone literal
-		 postpone execute
-		-20 postpone literal
-		postpone throw
-		here over - swap !
-	else
-		swap 0<> if
-			execute
-			-20 throw
-		else
-			drop
-		then
-	then
-; IMMEDIATE
-
 : ? ( addr -- ) @ . ;
 
 : dump-xline		( addr n -- )
@@ -1178,7 +1094,7 @@ variable basehold
 ;
 
 \ **** CASE ... OF
-cr .( case ... of...)
+.( case ... of...) cr
 
 : case
   0			\ marker for bottom of stack
@@ -1224,7 +1140,7 @@ cr .( case ... of...)
 : maybe-test-exceptions
 	\ Don't have conditional compilation yet
 	run-tests @ if
-		cr .( test-exceptions... )
+		.( test-exceptions... ) cr
 		_test-exceptions
 	then
 ;
@@ -1232,7 +1148,7 @@ cr .( case ... of...)
 ' maybe-test-exceptions catch drop
 
 \ **** Search Order / word / find / find-name / etc
-cr .( Search order... )
+.( Search order... ) cr
 
 : wordlist \ -- wid
   here 1 cells allot dup 0 swap !
@@ -1434,7 +1350,7 @@ create _word-buf 257 allot align
 	forth-wordlist set-current
 ;
 
-cr .( Environment... )
+.( Environment...) cr
 
 environment set-current
 : /counted-string		255 ;
@@ -1463,8 +1379,50 @@ forth-wordlist	set-current
   then
 ;
 
+\ *** Interpret time if/then
+
+.( [if] [else] [then]... ) cr
+
+: [else]	( -- )
+	1 begin									\ level
+	begin bl word count dup while			\ level adr len
+	  2dup s" [if]" cicompare 0= if
+		2drop
+		1+									\ level'
+	  else									\ level adr len
+		2dup s" [else]" cicompare 0= if
+		  2drop
+		  1-
+		  dup if 1+ then					\ level'
+		else
+		  s" [then]" cicompare 0= if		\ level
+			1-								\ level'
+		  then
+		then
+	  then ?dup 0= if exit then				\ level'
+	repeat 2drop
+	refill 0= until
+	drop
+; IMMEDIATE
+
+: [if]		( flag -- )
+	0= if postpone [else] then
+; IMMEDIATE
+
+: [then]	( -- )
+; IMMEDIATE
+
+: [defined]
+	bl word find nip 0<>
+; IMMEDIATE
+
+: [undefined]
+	bl word find nip 0=
+; IMMEDIATE
+
 \ *** Simple string buffer
-.( Strings... )
+.( Strings... ) cr
+
 
 256 buffer: strcat-buf
 
@@ -1497,46 +1455,118 @@ strcat-reset
 	strcat-str evaluate
 ;
 
-\ *** Interpret time if/then
+\ Escaped string handling
 
-cr .( [if] [else] [then]... ) cr
+internal-defs
 
-: [else]	( -- )
-  1 begin									\ level
-	begin bl word count dup while			\ level adr len
-	  2dup s" [if]" cicompare 0= if
-		2drop
-		1+									\ level'
-	  else									\ level adr len
-		2dup s" [else]" cicompare 0= if
-		  2drop
-		  1-
-		  dup if 1+ then					\ level'
+1024 constant ss-buf-size
+
+ss-buf-size buffer: ss-buf
+
+: x-escaped-str-overflow	." Escaped string was too long, increase ss-buf-size" cr ;
+: x-eoi-bksp							." End of input reading character following backspace" cr ;
+: x-eoi-quote							." Unterminated s\" '"' emit ."  string" cr ;
+: x-bad-hex								." Missing or malformed hex constant following \x" cr ;
+
+: (append-ss-chr)	( c -- ) \ Append c to ss-buf and update its count
+	ss-buf @ [ 1024 1 cells - ] literal < averts x-escaped-str-overflow
+	ss-buf dup @	swap cell+ + c!
+	1 ss-buf	+!
+;
+
+: (hex>) ( c -- u flag )	\ Convert a single 0-9|A-F|a-f chr to 0-15 value
+	dup '0' >= over '9' <= and if
+		'0' -
+	else
+		dup 'A' >= over 'Z' <= and if
+			'A' - 10 +
 		else
-		  s" [then]" cicompare 0= if		\ level
-			1-								\ level'
-		  then
+			dup 'a' >= over 'z' <= and if
+				'a' - 10 +
+			else
+				x-bad-hex
+				0 false
+			then
 		then
-	  then ?dup 0= if exit then				\ level'
-	repeat 2drop
-  refill 0= until
-  drop
+	then
+;
+
+: (2hex) ( -- u )		\ Parse 2 chars from the input stream and convert to a 1 byte hex digit
+	inch averts x-bad-hex
+	(hex>) 16 *
+	inch averts x-bad-hex
+	(hex>) +
+;
+
+: (handle-bksp) ( "c" -- )
+	inch averts	x-eoi-bksp
+	case
+		'a' of	7		endof
+		'b' of	8		endof
+		'e' of	27	endof
+		'f' of	12	endof
+		'l' of	10	endof
+		'm' of	10 (append-ss-chr) 13 endof			\ CR LF
+		'n' of	10 (append-ss-chr) 13 endof			\ CR LF
+		'q' of	34	endof
+		'r' of	13	endof
+		't' of	9		endof
+		'v' of	11	endof
+		'z' of	0		endof
+		'"' of	34	endof
+		'x' of	(2hex)	endof
+		dup	\ Default, just append whatever was escaped. Note that this correctly handles "\\"
+	endcase
+	(append-ss-chr)
+;
+
+: (reset-ss-buf)	( -- )
+	ss-buf ss-buf-size erase
+;
+
+public-defs
+
+\ Process an escaped string. Compile time: caddr u via sliteral. Interpret time: caddr u
+: s\"	( "ccc<quote>" -- caddr u )
+	(reset-ss-buf)
+	begin
+		inch averts	x-eoi-quote
+		dup '"' = if
+			\ String finished
+			drop
+			ss-buf dup @			( addr len )
+			swap cell+ swap		( addr' len )		\ Skip past length cell
+			state @ if
+				[compile] sliteral
+			then
+			\ Interpret time, leave caddr u on stack
+			exit
+		then
+
+		dup '\' = if
+			drop
+			(handle-bksp)
+		else
+			(append-ss-chr)
+		then
+	again
 ; IMMEDIATE
 
-: [if]		( flag -- )
-  0= if postpone [else] then
-; IMMEDIATE
+run-tests @ [if]
+internal-defs
 
-: [then]	( -- )
-; IMMEDIATE
-
-: [defined]
-  bl word find nip 0<>
-; IMMEDIATE
-
-: [undefined]
-  bl word find nip 0=
-; IMMEDIATE
+: t-ct0
+	." Should output -> Testing 1234 normal str<CR>" cr
+	s\" Testing 1234 normal str" type cr
+	." Should also output -> Testing 1234 normal str<CR>" cr
+	s\" Testing 1234 normal str\n" type
+	." Should output -> <TAB><BEL>This should be red<TAB>This should be bright<CR>" cr
+	s\" \t\b\e[31mThis should be red\e[0m\t\e[1mThis should be bright\e[0m\n" type
+;
+t-ct0
+.( Should output -> This is at interp time<CR>) cr
+s\" This is at interp time\n" type
+[then]
 
 \ **** Structures
 .( Structures...) cr
@@ -1611,7 +1641,7 @@ public-defs
 ;
 
 run-tests @ [if]		\ Tests
-cr .( Namespaced struct tests...)
+.( Namespaced struct tests...) cr
 struct: person{
 2 cells +field name
 1 chars +field gender aligned
@@ -1777,7 +1807,7 @@ test-lambda-word
 [: ." Testing lambda outside colon def" cr ;] execute
 [: ." Testing nested lambda (outside colon def):" [: ." Inner!" cr ;] execute ;] execute
 
-.( Do does experiment)
+.( Do does experiment) cr
 : lambda-tbl		( cnt -- )
 	create
 	0 ?do , loop
@@ -2777,6 +2807,58 @@ begin-module random
 
 end-module
 
+begin-module syscall
+
+: syscalln	( a0 .. an n call -- u )
+		*syscall
+;
+
+: syscall0 ( call -- u )
+		0 swap syscalln
+;
+
+: syscall1 ( call -- u )
+		1 swap syscalln
+;
+
+: syscall2 ( call -- u )
+		2 swap syscalln
+;
+
+: syscall3 ( call -- u )
+		3 swap syscalln
+;
+
+: syscall4 ( call -- u )
+		4 swap syscalln
+;
+
+: syscall5 ( call -- u )
+		5 swap syscalln
+;
+
+: syscall6 ( call -- u )
+		6 swap syscalln
+;
+
+: syscall-test ( -- )
+		." Testing syscalls 10-16 w/varying args..." cr
+		17 10 do
+			i 10 - 0 ?do
+				i j + 20 *
+			loop
+			i 10 -
+			i
+			syscalln
+			."   SC " i . ." returned " . cr
+		loop
+;
+
+.( Syscall tests: ) cr
+syscall-test
+
+end-module
+
 : do-for-millis ( ms xt -- )
 	swap 1000 * get-ticks + >r		( xt  r: ms )
 	0
@@ -2789,16 +2871,19 @@ end-module
 	r> drop
 ;
 
-run-tests @ [if]
+: .time
+	parse-word 2dup
+	find-word ( addr u 0|xt -1|xt 1 ) 0= if type ."  .time?" cr -21 throw then
+	get-ticks >r ?execute get-ticks r> -
+	-rot type ."  executed in " . ."  ticks." cr
+;
+
+1 [if]
 random import
 
-get-ticks
-font::draw-chart
-get-ticks swap -
-.( Drew 256 glyphs in ) . .(  us) cr
-
-screen::clear
-screen::paint-screen
+.time font::draw-chart
+.time screen::clear
+.time screen::paint-screen
 
 : randprint
 	0 screen::screen-width range

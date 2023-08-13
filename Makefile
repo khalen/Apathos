@@ -51,11 +51,7 @@ else
 	@echo "$(DEPLOY_FILES)..."
 	@cp $(DEPLOY_FILES) $(BOOT_MNT)
 
-	@mkdir -p $(BOOT_MNT)/overlays
-	@echo "$(OVERLAY_FILES)..."
-	@cp $(OVERLAY_FILES) $(BOOT_MNT)/overlays
-	@sync
-
 	@echo "### Unmounting $(BOOT_MNT)..."
 	diskutil unmount $(BOOT_MNT)
 endif
+

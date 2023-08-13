@@ -1,8 +1,8 @@
 // -*-  tab-width 4; -*-
 
+#include "kernel.h"
 #include "base_defs.h"
 #include "circle/logger.h"
-#include "kernel.h"
 #include "linenoise.h"
 #include "mem.h"
 #include "mini_uart.h"
@@ -10,18 +10,22 @@
 #include "printf.h"
 #include "timer.h"
 #include "utils.h"
+#include "syscalls.h"
 #include <circle/new.h>
+#include <fatfs/ff.h>
 
 CKernel gKernel;
+FATFS   gRamFS;
 
 CKernel::CKernel()
-	: CpuThrottle(TCPUSpeed::CPUSpeedMaximum), Serial(), Timer(&Interrupt),
-	  Logger(4, &Timer)
+	: CpuThrottle(TCPUSpeed::CPUSpeedMaximum), Serial(), Timer(&Interrupt), Logger(4, &Timer),
+	  USBHCI(&Interrupt, &Timer), EMMC(&Interrupt, &Timer, &ActLED)
 {
 }
 
 CKernel::~CKernel()
-{}
+{
+}
 
 bool CKernel::Initialize()
 {
@@ -30,7 +34,7 @@ bool CKernel::Initialize()
 	ok = ok && Serial.Initialize(921600);
 	if (ok)
 	{
-		CDevice *target = DeviceNameService.GetDevice( Options.GetLogDevice(), false );
+		CDevice *target = DeviceNameService.GetDevice(Options.GetLogDevice(), false);
 		if (target == nullptr)
 		{
 			target = &Serial;
@@ -38,8 +42,22 @@ bool CKernel::Initialize()
 
 		ok = Logger.Initialize(target);
 	}
+
 	ok = ok && Interrupt.Initialize();
+	if (!ok)
+		printf("Interrupt init fail\n");
+
 	ok = ok && Timer.Initialize();
+	if (!ok)
+		printf("Timer init fail\n");
+
+	ok = ok && USBHCI.Initialize();
+	if (!ok)
+		printf("USB init fail\n");
+
+	ok = ok && EMMC.Initialize();
+	if (!ok)
+		printf("EMMC init fail\n");
 
 	return ok;
 }
@@ -95,7 +113,7 @@ u64 kernel_readline(char *destBuffer, u64 maxLen, u64 prompt)
 
 void _putchar(char c)
 {
-	uart_putc(c);
+	uart_putb(c);
 }
 
 void magicCallback(void)
@@ -118,7 +136,7 @@ int main(void)
 
 		while (1)
 		{
-			asm volatile ("nop");
+			asm volatile("nop");
 		}
 	}
 
@@ -126,11 +144,36 @@ int main(void)
 
 	u64 excLevel = get_el();
 	printf("\nHello from Apathos. Running at exception level: %d (%s)\n", excLevel, excLevelNames[excLevel]);
-	printf("Initializing kernel...\n");
+	printf("Initializing ram drive...\n");
+	u8* buf = new u8[4096];
+	FRESULT res = f_mkfs("RAM:", nullptr, buf, 4096);
+	if (res == FR_OK)
+	{
+		res = f_mount(&gRamFS, "RAM:", 1);
+		if (res == FR_OK)
+		{
+			FATFS* fs = nullptr;
+			u32 freeClusters;
+
+			f_getfree("RAM:", &freeClusters, &fs);
+			printf("  RAM has %d free clusters\n", freeClusters);
+		}
+	}
+	delete[] buf;
+
+	syscalls_init();
 
 	printf("Booting FITH v.-3.1415927\n");
+	// gKernel.Serial.RegisterMagicReceivedHandler("\x12", magicCallback);
 
-	u8	*fithMem = new (HEAP_HIGH) u8[1024 * 1024 * 1024];
+	u8 *fithMem = new (HEAP_HIGH) u8[1024 * 1024 * 1024];
+
+	#if 0
+	while (uart_getb() != ' ')
+	{
+		asm volatile("nop");
+	}
+	#endif
 
 	int loopCnt = 0;
 	while (loopCnt < 10)
@@ -143,4 +186,3 @@ int main(void)
 	rebootSystem();
 }
 }
-
